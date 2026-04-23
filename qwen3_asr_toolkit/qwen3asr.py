@@ -1,10 +1,17 @@
 import os
+import io
 import time
 import random
-import dashscope
+import base64
 
+import re
+import numpy as np
+import soundfile as sf
+
+from openai import OpenAI
 from pydub import AudioSegment
 
+from qwen3_asr_toolkit.env_utils import load_project_dotenv
 
 MAX_API_RETRY = 10
 API_RETRY_SLEEP = (1, 2)
@@ -26,8 +33,13 @@ language_code_mapping = {
 
 
 class QwenASR:
-    def __init__(self, model: str = "qwen3-asr-flash"):
+    def __init__(self, model: str = "qwen3-asr-flash", base_url: str = None, api_key: str = None):
+        load_project_dotenv()
         self.model = model
+        self.client = OpenAI(
+            api_key=api_key or os.environ.get("OPENAI_API_KEY", "EMPTY"),
+            base_url=base_url or os.environ.get("OPENAI_BASE_URL", "http://localhost:8000/v1"),
+        )
 
     def post_text_process(self, text, threshold=20):
         def fix_char_repeats(s, thresh):
@@ -96,6 +108,86 @@ class QwenASR:
         text = fix_char_repeats(text, threshold)
         return fix_pattern_repeats(text, threshold)
 
+    def _encode_audio_base64(self, file_path: str) -> str:
+        """Read an audio file and return its base64-encoded data URI."""
+        ext = os.path.splitext(file_path)[1].lstrip('.').lower()
+        mime_map = {
+            'wav': 'audio/wav',
+            'mp3': 'audio/mpeg',
+            'ogg': 'audio/ogg',
+            'flac': 'audio/flac',
+            'm4a': 'audio/mp4',
+        }
+        mime_type = mime_map.get(ext, f'audio/{ext}')
+        with open(file_path, 'rb') as f:
+            audio_bytes = f.read()
+        b64 = base64.b64encode(audio_bytes).decode('utf-8')
+        return f"data:{mime_type};base64,{b64}"
+
+    def _encode_audio_bytes_base64(self, audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
+        b64 = base64.b64encode(audio_bytes).decode("utf-8")
+        return f"data:{mime_type};base64,{b64}"
+
+    def _parse_asr_output(self, raw_text: str):
+        language = "Not Supported"
+        recog_text = raw_text or ""
+
+        match = re.match(r'^language\s+(\w+)\s*<asr_text>(.*)', recog_text, re.DOTALL)
+        if match:
+            detected_lang = match.group(1)
+            recog_text = match.group(2).strip()
+            if detected_lang in language_code_mapping.values():
+                language = detected_lang
+            else:
+                language = language_code_mapping.get(detected_lang, detected_lang)
+        return language, self.post_text_process(recog_text)
+
+    def _run_chat_completions(self, wav_url: str, context: str = ""):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": context},
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "audio_url",
+                        "audio_url": {"url": wav_url},
+                    },
+                ]
+            }
+        ]
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+        )
+        choice = response.choices[0]
+        raw_text = choice.message.content or ""
+        return self._parse_asr_output(raw_text)
+
+    def asr_waveform(self, wav: np.ndarray, sr: int = 16000, context: str = ""):
+        wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+        with io.BytesIO() as buff:
+            sf.write(buff, wav, sr, format="WAV")
+            audio_bytes = buff.getvalue()
+        wav_url = self._encode_audio_bytes_base64(audio_bytes, "audio/wav")
+
+        response = None
+        for idx in range(MAX_API_RETRY):
+            try:
+                return self._run_chat_completions(wav_url=wav_url, context=context)
+            except Exception as e:
+                err_msg = str(e)
+                print(f"Retry {idx + 1}... waveform\n{err_msg}")
+                if "encoder cache size" in err_msg:
+                    raise
+                response = e
+            time.sleep(random.uniform(*API_RETRY_SLEEP))
+        raise Exception(f"ASR task failed after {MAX_API_RETRY} retries!\n{response}")
+
     def asr(self, wav_url: str, context: str = ""):
         if not wav_url.startswith("http"):
             assert os.path.exists(wav_url), f"{wav_url} not exists!"
@@ -108,66 +200,33 @@ class QwenASR:
                 mp3_path = os.path.splitext(file_path)[0] + ".mp3"
                 audio = AudioSegment.from_file(file_path)
                 audio.export(mp3_path, format="mp3")
-                wav_url = mp3_path
+                file_path = mp3_path
 
-            wav_url = f"file://{wav_url}"
+            # Encode audio as base64 data URI for OpenAI-compatible API
+            wav_url = self._encode_audio_base64(file_path)
 
         # Submit the ASR task
-        for _ in range(MAX_API_RETRY):
+        response = None
+        for idx in range(MAX_API_RETRY):
             try:
-                messages = [
-                    {
-                        "role": "system",
-                        "content": [
-                            {"text": context},
-                        ]
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {"audio": wav_url},
-                        ]
-                    }
-                ]
-                response = dashscope.MultiModalConversation.call(
-                    model=self.model,
-                    messages=messages,
-                    result_format="message",
-                    asr_options={
-                        "enable_lid": True,
-                        "enable_itn": False
-                    }
-                )
-
-                if response.status_code != 200:
-                    raise Exception(f"http status_code: {response.status_code} {response}")
-                output = response['output']['choices'][0]
-
-                recog_text = None
-                if len(output["message"]["content"]):
-                    recog_text = output["message"]["content"][0]["text"]
-                if recog_text is None:
-                    recog_text = ""
-
-                lang_code = None
-                if "annotations" in output["message"]:
-                    lang_code = output["message"]["annotations"][0]["language"]
-                language = language_code_mapping.get(lang_code, "Not Supported")
-
-                return language, self.post_text_process(recog_text)
+                return self._run_chat_completions(wav_url=wav_url, context=context)
             except Exception as e:
-                try:
-                    print(f"Retry {_ + 1}...  {wav_url}\n{response}")
-                    if response.code == "DataInspectionFailed":
-                        print(f"DataInspectionFailed! Invalid input audio \"{wav_url}\"")
-                        break
-                except Exception as e:
-                    print(f"Retry {_ + 1}...  {wav_url}\n{e}")
+                err_msg = str(e)
+                print(f"Retry {idx + 1}...  {wav_url[:100]}...\n{err_msg}")
+                # Don't retry on encoder cache size exceeded - this won't resolve with retries
+                if "encoder cache size" in err_msg:
+                    raise
+                response = e
             time.sleep(random.uniform(*API_RETRY_SLEEP))
-        raise Exception(f"{wav_url} task failed!\n{response}")
+        raise Exception(f"ASR task failed after {MAX_API_RETRY} retries!\n{response}")
 
 
 if __name__ == "__main__":
-    qwen_asr = QwenASR(model="qwen3-asr-flash")
+    load_project_dotenv()
+    qwen_asr = QwenASR(
+        model=os.environ.get("QWEN3_ASR_MODEL", "qwen3-asr-flash"),
+        base_url=os.environ.get("OPENAI_BASE_URL"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
+    )
     asr_text = qwen_asr.asr(wav_url="/path/to/your/wav_file.wav")
     print(asr_text)

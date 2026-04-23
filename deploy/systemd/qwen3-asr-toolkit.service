@@ -1,0 +1,16 @@
+[Unit]
+Description=Qwen3-ASR-Toolkit Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/qwen3-asr-toolkit
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/qwen3-asr-toolkit/.venv/bin/python -m qwen3_asr_toolkit.server --host 127.0.0.1 --port 18000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

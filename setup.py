@@ -2,22 +2,64 @@ from setuptools import setup, find_packages
 
 setup(
     name='qwen3-asr-toolkit',
-    version='1.0.4',
+    version='2.0.0',
     packages=find_packages(),
     include_package_data=True,
+    package_data={
+        'qwen_asr': ['inference/assets/*.dict'],
+    },
     install_requires=[
-        'dashscope',
+        'openai',
         'librosa',
         'soundfile',
         'silero_vad',
         'pydub',
         'tqdm',
         'numpy',
-        'srt'
+        'srt',
+        'requests',
+        'fastapi',
+        'uvicorn',
+        'python-multipart',
+        'websockets',
+        'python-dotenv',
     ],
+    extras_require={
+        'qwen-asr': [
+            'transformers==4.57.6',
+            'nagisa==0.2.11',
+            'soynlp==0.0.493',
+            'accelerate==1.12.0',
+            'qwen-omni-utils',
+            'sox',
+            'pytz',
+            'gradio',
+            'flask',
+            'scipy',
+        ],
+        'qwen-asr-vllm': [
+            'transformers==4.57.6',
+            'nagisa==0.2.11',
+            'soynlp==0.0.493',
+            'accelerate==1.12.0',
+            'qwen-omni-utils',
+            'sox',
+            'pytz',
+            'gradio',
+            'flask',
+            'scipy',
+            'vllm==0.14.0',
+        ],
+    },
     entry_points={
         'console_scripts': [
-            'qwen3-asr=qwen3_asr_toolkit.call_api:main'
+            'qwen3-asr=qwen3_asr_toolkit.call_api:main',
+            'qwen3-asr-server=qwen3_asr_toolkit.server:main',
+            'qwen3-asr-offline-cli=qwen3_asr_toolkit.offline_cli:main',
+            'qwen3-asr-stream-cli=qwen3_asr_toolkit.realtime_cli:main',
+            'qwen-asr-demo=qwen_asr.cli.demo:main',
+            'qwen-asr-demo-streaming=qwen_asr.cli.demo_streaming:main',
+            'qwen-asr-serve=qwen_asr.cli.serve:main',
         ]
     },
     author='He Wang',

@@ -1,200 +1,155 @@
 # Qwen3-ASR-Toolkit
 
-[![PyPI version](https://badge.fury.io/py/qwen3-asr-toolkit.svg)](https://badge.fury.io/py/qwen3-asr-toolkit)
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Also in](https://img.shields.io/badge/Also%20in-Java-orange.svg)](#-implementations-in-other-languages)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+一个面向云端部署的 Qwen3-ASR 工具集，支持：
 
-## 😊 Important Notice
+- 离线语音转写：REST API + CLI
+- 实时语音转写：WebSocket + CLI
+- 长音频自动 VAD 切分，且单段严格不超过 `60s`
+- 可选接入 `Qwen3-ForcedAligner-0.6B` 做离线时间戳对齐
+- 基于 vLLM OpenAI 兼容接口调用 ASR 服务
 
-Qwen3-ASR is now **open-sourced** 🎉🎉🎉. Welcome to visit the [**GitHub**](https://github.com/QwenLM/Qwen3-ASR) and [**blog**](https://qwen.ai/blog?id=qwen3asr) for more information. The open-source model offers functionality comparable to the API and supports free, fast local deployment. Qwen3-ASR open-source model includes two powerful **all-in-one speech recognition models (0.6B/1.7B)** that support language identification and ASR for **52 languages and dialects**, as well as a novel non-autoregressive speech forced-alignment model that can align text–speech pairs in 11 languages. Its powerful performance is sufficient to deliver highly compelling speech-to-text transcription capabilities. Welcome to use it!
+当前仓库已经内置了从上游迁出的 `qwen_asr/` 包和示例代码，不再依赖已删除的 `references/` 目录。
 
-## Overview 
+## 文档导航
 
-An advanced, high-performance Python command-line toolkit for using the **Qwen-ASR API** (formerly Qwen3-ASR-Flash). This implementation overcomes the API's 3-minute audio length limitation by intelligently splitting long audio/video files and processing them in parallel, enabling rapid transcription of hours-long content.
+- 文档总索引：[doc/README.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/README.md)
+- 详细部署文档：[doc/DEPLOYMENT.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/DEPLOYMENT.md)
+- 使用说明文档：[doc/USAGE.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/USAGE.md)
+- 开发者指南：[doc/DEVELOPER_GUIDE.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/DEVELOPER_GUIDE.md)
+- 技术改进说明：[doc/TECH_IMPROVEMENTS.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/TECH_IMPROVEMENTS.md)
+- 云端 API/WS 协议说明：[doc/cloud_api_ws_usage.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/cloud_api_ws_usage.md)
+- vLLM 迁移记录：[doc/vllm_migration.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/vllm_migration.md)
 
-## 🚀 Key Features
+## 核心能力
 
--   **Break the 3-Minute Limit**: Seamlessly transcribe audio and video files of any length by bypassing the official API's duration constraint.
--   **Smart Audio Splitting**: Utilizes **Voice Activity Detection (VAD)** to split audio into meaningful chunks at natural silent pauses. This ensures that words and sentences are not awkwardly cut off.
--   **High-Speed Parallel Processing**: Leverages multi-threading to send audio chunks to the Qwen-ASR API concurrently, dramatically reducing the total transcription time for long files.
--   **Intelligent Post-Processing**: Automatically detects and removes common ASR **hallucinations and repetitive artifacts** for cleaner, more accurate transcripts.
--   **SRT Subtitle Generation**: Automatically create timestamped **`.srt` subtitle files** based on VAD segments, perfect for adding captions to video content.
--   **Automatic Audio Resampling**: Automatically converts audio from any sample rate and channel count to the 16kHz mono format required by the Qwen-ASR API. You can use any audio file without worrying about pre-processing.
--   **Universal Media Support**: Supports virtually any audio and video format (e.g., `.mp4`, `.mov`, `.mkv`, `.mp3`, `.wav`, `.m4a`) thanks to its reliance on FFmpeg.
--   **Simple & Easy to Use**: A straightforward command-line interface allows you to get started with just a single command.
+- 离线转写接口：`POST /api/v1/offline/transcribe`
+- 实时转写接口：`ws://<host>:<port>/ws/v1/realtime/transcribe`
+- 离线转写支持参数 `use_forced_aligner=true|false`
+- 实时转写不做对齐，只做准实时增量转写
+- `sample/` 目录内置真实测试音频
 
-## ⚙️ How It Works
+## 当前项目结构
 
-This tool follows a robust pipeline to deliver fast and accurate transcriptions for long-form media:
-
-1.  **Media Loading**: The script first loads your media file, whether it's a **local file or a remote URL**.
-2.  **VAD-based Chunking**: It analyzes the audio stream using Voice Activity Detection (VAD) to identify silent segments.
-3.  **Intelligent Splitting**: The audio is then split into smaller chunks based on the detected silences. Each chunk's duration is managed to stay under the 3-minute API limit, with a **user-configurable target length (defaulting to 120 seconds)**, preventing mid-sentence cuts.
-4.  **Parallel API Calls**: A thread pool is initiated to upload and process these chunks concurrently using the DashScope Qwen-ASR API.
-5.  **Result Aggregation & Cleaning**: The transcribed text segments from all chunks are collected, re-ordered, and then **post-processed to remove detected repetitions and hallucinations**.
-6.  **Output Generation**: The final, cleaned transcription is printed to the console and saved to a `.txt` file. **Optionally, a timestamped `.srt` subtitle file can also be generated.**
-
-## 🏁 Getting Started
-
-Follow these steps to set up and run the project on your local machine.
-
-### Prerequisites
-
--   Python 3.8 or higher.
--   **FFmpeg**: The script requires FFmpeg to be installed on your system to handle media files.
-    -   **Ubuntu/Debian**: `sudo apt update && sudo apt install ffmpeg`
-    -   **macOS**: `brew install ffmpeg`
-    -   **Windows**: Download from the [official FFmpeg website](https://ffmpeg.org/download.html) and add it to your system's PATH.
--   **DashScope API Key**: You need an API key from Alibaba Cloud's DashScope.
-    -   You can obtain one from the [DashScope Console](https://dashscope.console.aliyun.com/apiKey). If you are calling the API services of Tongyi Qwen for the first time, you can follow the tutorial on [this website](https://help.aliyun.com/zh/model-studio/first-api-call-to-qwen) to create your own API Key.
-    -   For better security and convenience, it is **highly recommended** to set your API key as an environment variable named `DASHSCOPE_API_KEY`. The script will automatically use it, and you won't need to pass the `--api-key` argument in the command.
-
-        **On Linux/macOS:**
-        ```bash
-        export DASHSCOPE_API_KEY="your_api_key_here"
-        ```
-        *(To make this permanent, add the line to your `~/.bashrc`, `~/.zshrc`, or `~/.profile` file.)*
-
-        **On Windows (Command Prompt):**
-        ```cmd
-        set DASHSCOPE_API_KEY="your_api_key_here"
-        ```
-
-        **On Windows (PowerShell):**
-        ```powershell
-        $env:DASHSCOPE_API_KEY="your_api_key_here"
-        ```
-        *(For a permanent setting on Windows, search for "Edit the system environment variables" in the Start Menu and add `DASHSCOPE_API_KEY` to your user variables.)*
-
-### Installation
-
-We recommend installing the tool directly from PyPI for the simplest setup.
-
-#### Option 1: Install from PyPI (Recommended)
-
-Simply run the following command in your terminal. This will install the package and make the `qwen3-asr` command available system-wide.
-
-```bash
-pip install qwen3-asr-toolkit
+```text
+qwen3_asr_toolkit/    主工具实现（服务端、CLI、离线/实时转写、对齐客户端）
+qwen_asr/             从上游迁入的官方包
+doc/                  中文文档
+scripts/              部署与验证脚本
+sample/               真实测试音频
+tests/                单元测试
+examples/             Java 示例与上游示例快照
 ```
 
-#### Option 2: Install from Source
+## 快速开始
 
-If you want to install the latest development version or contribute to the project, you can install from the source code.
-
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/QwenLM/Qwen3-ASR-Toolkit.git
-    cd Qwen3-ASR-Toolkit
-    ```
-
-2.  Install the package:
-    ```bash
-    pip install .
-    ```
-
-## 📖 Usage
-
-Once installed, you can use the `qwen3-asr` command directly from your terminal. By default, the tool will print progress information.
-
-### Command
+### 1. 安装依赖
 
 ```bash
-qwen3-asr -i <input_file_or_url> [-key <api_key>] [-j <num_threads>] [-c <context>] [-d <duration>] [-t <tmp_dir>] [--save-srt] [-s]
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+pip install -e .
 ```
 
-### Arguments
+### 2. 配置 `.env`
 
-| Argument                  | Short  | Description                                                                          | Required/Optional                        |
-| ------------------------- | ------ | ------------------------------------------------------------------------------------ | ---------------------------------------- |
-| `--input-file`            | `-i`   | Path to the local media file or a remote URL (http/https) to transcribe.             | **Required**                             |
-| `--context`               | `-c`   | Text context to guide the ASR model, improving recognition of specific terms.        | Optional, Default: `""`                  |
-| `--dashscope-api-key`     | `-key` | Your DashScope API Key.                                                              | Optional (if `DASHSCOPE_API_KEY` is set) |
-| `--num-threads`           | `-j`   | The number of concurrent threads to use for API calls.                               | Optional, **Default: 4**                 |
-| `--vad-segment-threshold` | `-d`   | Target duration in seconds for each VAD-split audio chunk.                           | Optional, **Default: 120**               |
-| `--tmp-dir`               | `-t`   | Path to a directory for storing temporary chunk files.                               | Optional, Default: `~/qwen3-asr-cache`   |
-| `--save-srt`              | `-srt` | Generate and save a timestamped SRT subtitle file in addition to the `.txt` file.    | Optional                                 |
-| `--silence`               | `-s`   | Silence mode. Suppresses detailed progress and chunking information on the terminal. | Optional                                 |
+项目根目录的 [`.env.example`](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/.env.example) 已给出模板。
 
-### Output
+当前已验证可用的配置格式如下：
 
-The full transcription result will be printed to the terminal (unless in `--silence` mode) and also saved in a `.txt` file in the same directory as the input file. For example, if you process `my_video.mp4`, the output will be saved to `my_video.txt`.
+```env
+OPENAI_API_KEY=your_asr_api_key
+OPENAI_BASE_URL=http://your-asr-host:10010/v1
+QWEN3_ASR_MODEL=Qwen3-ASR-1.7B
 
-**If you use the `--save-srt` flag, a corresponding `my_video.srt` subtitle file will also be created in the same directory.**
+QWEN3_ALIGNER_BASE_URL=http://your-aligner-host:10011
+QWEN3_ALIGNER_API_KEY=your_aligner_api_key
+QWEN3_ALIGNER_MODEL=Qwen3-ForcedAligner-0.6B
 
----
+QWEN3_ASR_NUM_THREADS=4
+QWEN3_ASR_VAD_TARGET_SEGMENT_S=45
+QWEN3_ASR_VAD_MAX_SEGMENT_S=60
+QWEN3_ASR_STREAM_DECODE_INTERVAL_MS=600
+QWEN3_ASR_STREAM_MIN_CHUNK_MS=200
+QWEN3_ASR_STREAM_FINALIZE_SILENCE_MS=600
+QWEN3_ASR_STREAM_MAX_SEGMENT_S=20
+QWEN3_ALIGNER_TIMEOUT_S=120
+QWEN3_ALIGNER_TIMESTAMP_SEGMENT_TIME_MS=80
+```
 
-## ✨ Examples
-
-Here are a few examples of how to use the tool.
-
-#### 1. Basic Transcription of a Local File
-
-Transcribe a video file using the default 4 threads. This command assumes you have set the `DASHSCOPE_API_KEY` environment variable.
+### 3. 启动服务
 
 ```bash
-qwen3-asr -i "/path/to/my/long_lecture.mp4"
+python -m qwen3_asr_toolkit.server --host 0.0.0.0 --port 18000
 ```
 
-#### 2. Transcribe a Remote Audio File
-
-Directly process an audio file from a URL.
+健康检查：
 
 ```bash
-qwen3-asr -i "https://somewebsite.com/audios/podcast_episode.mp3"
+curl http://127.0.0.1:18000/health
 ```
 
-#### 3. Generate an SRT Subtitle File
-
-Use the `--save-srt` (or `-srt`) flag to generate a timestamped subtitle file alongside the plain text transcript. This is ideal for video captioning.
+### 4. 运行离线 CLI
 
 ```bash
-qwen3-asr -i "/path/to/my/documentary.mp4" -srt
+python -m qwen3_asr_toolkit.offline_cli \
+  -i sample/sample_0.mp3 \
+  -u http://127.0.0.1:18000/api/v1/offline/transcribe \
+  --use-forced-aligner \
+  --save-text
 ```
-*This command will create `documentary.txt` and `documentary.srt`.*
 
-#### 4. Increase Concurrency and Pass API Key
-
-Transcribe a long audio file using 8 parallel threads and pass the API key directly via the command line.
+### 5. 运行实时 CLI
 
 ```bash
-qwen3-asr -i "/path/to/my/podcast_episode_01.wav" -j 8 -key "your_api_key_here"
+python -m qwen3_asr_toolkit.realtime_cli \
+  -i sample/sample_0.mp3 \
+  -u ws://127.0.0.1:18000/ws/v1/realtime/transcribe \
+  --chunk-ms 300 \
+  --decode-interval-ms 600 \
+  --finalize-silence-ms 600
 ```
 
-#### 5. Provide Context and Customize Chunk Duration
+## 部署脚本
 
-If your audio contains specific jargon, use the `-c` flag. If you prefer shorter, more frequent subtitle segments, use `-d` to set a smaller chunk duration.
+已提供部署脚本：
+
+- [scripts/deploy_server.sh](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/scripts/deploy_server.sh)
+- [scripts/run_sample_tests.sh](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/scripts/run_sample_tests.sh)
+- `systemd` 示例：[deploy/systemd/qwen3-asr-toolkit.service](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/deploy/systemd/qwen3-asr-toolkit.service)
+
+常用命令：
 
 ```bash
-qwen3-asr -i "/path/to/my/tech_talk.mp4" -c "Qwen-ASR, DashScope, FFmpeg" -d 60 -srt
-```
-*This command will try to split the audio into chunks around 60 seconds long, which can result in more granular subtitles.*
-
-#### 6. Run in Silence Mode
-
-Use the `-s` or `--silence` flag to prevent progress details from being printed to the terminal. The final transcript will still be saved to a file.
-
-```bash
-qwen3-asr -i "/path/to/my/meeting_recording.m4a" -s
+bash scripts/deploy_server.sh install
+bash scripts/deploy_server.sh start
+bash scripts/deploy_server.sh status
+bash scripts/deploy_server.sh logs
 ```
 
-## 🌍 Implementations in Other Languages
+## 实测结果摘要
 
-While this project provides a full-featured Python toolkit, we also host implementations in other programming languages to demonstrate how the same core logic can be applied across different technology stacks. We warmly welcome the community to contribute examples in more languages!
+基于 `sample/` 中真实文件已完成联调验证：
 
-### ☕ Java Example
+- `sample/sample_0.mp3`
+  - 离线转写正常
+  - 开启对齐后可返回词级时间戳
+- `sample/deutsch.mp3`
+  - 长音频会自动切分
+  - 最大切分长度小于 `60s`
+- `sample/sample_2.m4a`
+  - 可完成长音频离线转写
+- WebSocket 实时链路已完成增量转写验证
 
-We have provided a Java version as a standalone example located in the `examples/java-example` directory of this repository. This example showcases how to implement the key features of the toolkit—including VAD-based audio chunking, parallel API requests, and result aggregation—using Java. It serves as a great starting point for Java developers looking to integrate Qwen-ASR into their applications.
+## 说明
 
-### How to Contribute Your Version
+- 如果只做离线/实时转写，不需要安装 `qwen_asr` 的完整额外依赖。
+- 如果要运行仓库内嵌的上游 `qwen_asr` 示例，可以安装：
+  - `pip install -e ".[qwen-asr]"`
+  - `pip install -e ".[qwen-asr-vllm]"`
 
-If you have implemented a similar toolkit in another language (e.g., **Go**, **Rust**, **C#**, **JavaScript/Node.js**), we would love to feature it! Please open a pull request to add your implementation to the `examples` directory. For more details on contributing, see the [Contributing](#-contributing) section below.
+## 许可证
 
-## 🤝 Contributing
-
-Contributions are welcome! If you have suggestions for improvements, please feel free to fork the repo, create a feature branch, and open a pull request. You can also open an issue with the "enhancement" tag.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- 本项目主代码遵循仓库根目录 [LICENSE](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/LICENSE)
+- 迁入的 `qwen_asr/` 与上游示例保留其原始许可证说明
