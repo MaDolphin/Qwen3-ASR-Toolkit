@@ -61,8 +61,6 @@
 
 ### 2.3 `examples/`
 
-- `java-example/`
-  - Java 版本示例
 - `upstream-qwen3-asr/`
   - 上游示例快照
   - 不是当前主系统的业务入口

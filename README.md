@@ -37,7 +37,7 @@ doc/                  中文文档
 scripts/              部署与验证脚本
 sample/               真实测试音频
 tests/                单元测试
-examples/             Java 示例与上游示例快照
+examples/             上游示例快照
 ```
 
 ## 快速开始
