@@ -203,6 +203,50 @@ class OfflineTranscriber:
             chunk.index = idx
         return output
 
+    def _smooth_aligner_items(self, items: List[Dict]) -> List[Dict]:
+        """Post-process aligner timestamp items to eliminate duplicate end_times and zero-duration entries."""
+        if not items:
+            return items
+
+        min_duration_s = max(0.001, self.aligner_timestamp_segment_time_ms / 1000.0)
+        smoothed = [dict(it) for it in items]
+
+        # 1. Fix zero/negative durations and enforce monotonicity
+        for i in range(len(smoothed)):
+            if i > 0 and smoothed[i]["start_time"] < smoothed[i - 1]["end_time"]:
+                smoothed[i]["start_time"] = smoothed[i - 1]["end_time"]
+            if smoothed[i]["end_time"] <= smoothed[i]["start_time"]:
+                smoothed[i]["end_time"] = smoothed[i]["start_time"] + min_duration_s
+
+        # 2. Flatten plateaus: consecutive items sharing the same end_time
+        i = 0
+        while i < len(smoothed):
+            j = i + 1
+            while j < len(smoothed) and abs(smoothed[j]["end_time"] - smoothed[i]["end_time"]) < 0.001:
+                j += 1
+            group_len = j - i
+            if group_len > 1:
+                start_t = smoothed[i]["start_time"]
+                end_t = max(smoothed[j - 1]["end_time"], start_t + group_len * min_duration_s)
+                step = (end_t - start_t) / group_len
+                for k in range(i, j):
+                    smoothed[k]["end_time"] = start_t + (k - i + 1) * step
+            i = j
+
+        # 3. Re-ensure monotonicity after plateau flattening
+        for i in range(1, len(smoothed)):
+            if smoothed[i]["start_time"] < smoothed[i - 1]["end_time"]:
+                smoothed[i]["start_time"] = smoothed[i - 1]["end_time"]
+            if smoothed[i]["end_time"] <= smoothed[i]["start_time"]:
+                smoothed[i]["end_time"] = smoothed[i]["start_time"] + min_duration_s
+
+        # 4. Round back to 3 decimals
+        for it in smoothed:
+            it["start_time"] = round(it["start_time"], 3)
+            it["end_time"] = round(it["end_time"], 3)
+
+        return smoothed
+
     def _split_by_fixed_max(self, wav: np.ndarray) -> List[AudioSegmentChunk]:
         max_samples = int(self.vad_max_segment_s * WAV_SAMPLE_RATE)
         chunks = []
@@ -299,6 +343,8 @@ class OfflineTranscriber:
                             "segment_index": int(segment.get("index", 0)),
                         }
                     )
+
+            items = self._smooth_aligner_items(items)
 
             return {
                 "requested": True,

@@ -54,8 +54,8 @@ def process_vad(wav: np.ndarray, worker_vad_model, segment_threshold_s: int = 12
         vad_params = {
             'sampling_rate': WAV_SAMPLE_RATE,
             'return_seconds': False,
-            'min_speech_duration_ms': 1500,
-            'min_silence_duration_ms': 500
+            'min_speech_duration_ms': 500,
+            'min_silence_duration_ms': 300
         }
 
         speech_timestamps = get_speech_timestamps(
@@ -67,23 +67,32 @@ def process_vad(wav: np.ndarray, worker_vad_model, segment_threshold_s: int = 12
         if not speech_timestamps:
             raise ValueError("No speech segments detected by VAD.")
 
-        potential_split_points_s = {0.0, len(wav)}
-        for i in range(len(speech_timestamps)):
-            start_of_next_s = speech_timestamps[i]['start']
-            potential_split_points_s.add(start_of_next_s)
-        sorted_potential_splits = sorted(list(potential_split_points_s))
+        # Build richer candidate split points:
+        # - every speech segment start and end
+        # - midpoints of gaps between consecutive speech segments
+        potential_split_points = {0, len(wav)}
+        for i, ts in enumerate(speech_timestamps):
+            potential_split_points.add(ts['start'])
+            potential_split_points.add(ts['end'])
+            if i > 0:
+                prev_end = speech_timestamps[i - 1]['end']
+                curr_start = ts['start']
+                if curr_start > prev_end:
+                    potential_split_points.add((prev_end + curr_start) // 2)
 
-        final_split_points_s = {0.0, len(wav)}
+        sorted_potential_splits = sorted(potential_split_points)
+
+        final_split_points = {0, len(wav)}
         segment_threshold_samples = segment_threshold_s * WAV_SAMPLE_RATE
         target_time = segment_threshold_samples
         while target_time < len(wav):
             closest_point = min(sorted_potential_splits, key=lambda p: abs(p - target_time))
-            final_split_points_s.add(closest_point)
+            final_split_points.add(closest_point)
             target_time += segment_threshold_samples
-        final_ordered_splits = sorted(list(final_split_points_s))
+        final_ordered_splits = sorted(final_split_points)
 
         max_segment_threshold_samples = max_segment_threshold_s * WAV_SAMPLE_RATE
-        new_split_points = [0.0]
+        new_split_points = [0]
 
         # Make sure that each audio segment does not exceed max_segment_threshold_s
         for i in range(1, len(final_ordered_splits)):
