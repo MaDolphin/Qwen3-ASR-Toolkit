@@ -11,7 +11,7 @@ Endpoints:
 
 Usage:
   export QWEN3_ASR_MODEL_PATH=/data/ai_work/Qwen3-ASR-1.7B
-  python deploy/vllm_streaming_server.py --host 0.0.0.0 --port 10012
+  python deploy/vllm_streaming_server_native.py --host 0.0.0.0 --port 10012
 """
 
 import argparse
@@ -30,6 +30,14 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from deploy.streaming_utils import (
+    accumulate_buffer,
+    build_ack_event,
+    build_started_event,
+    consume_full_chunks,
+    validate_audio_chunk,
+)
+
 # FastAPI
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -38,7 +46,7 @@ from fastapi.responses import JSONResponse
 _qwen_asr_model = None
 _model_path: Optional[str] = None
 _gpu_memory_utilization: float = 0.8
-_max_new_tokens: int = 32
+_max_new_tokens: int = 128
 _default_chunk_size_sec: float = 1.0
 _default_unfixed_chunk_num: int = 2
 _default_unfixed_token_num: int = 5
@@ -192,12 +200,12 @@ async def websocket_stream(websocket: WebSocket):
                     started = True
                     buffer = np.zeros((0,), dtype=np.float32)
                     await websocket.send_json(
-                        {
-                            "event": "started",
-                            "chunk_size_sec": chunk_size_sec,
-                            "unfixed_chunk_num": unfixed_chunk_num,
-                            "unfixed_token_num": unfixed_token_num,
-                        }
+                        build_started_event(
+                            stream=True,
+                            chunk_size_sec=chunk_size_sec,
+                            unfixed_chunk_num=unfixed_chunk_num,
+                            unfixed_token_num=unfixed_token_num,
+                        )
                     )
 
                 elif event == "finish":
@@ -240,28 +248,23 @@ async def websocket_stream(websocket: WebSocket):
                     )
                     continue
 
-                raw = message["bytes"]
-                if len(raw) % 4 != 0:
-                    await websocket.send_json(
-                        {
-                            "event": "error",
-                            "message": "Audio chunk must be float32 bytes (multiple of 4).",
-                        }
-                    )
-                    continue
-
-                chunk = np.frombuffer(raw, dtype=np.float32).reshape(-1).copy()
-                if chunk.size == 0:
+                ok, err_msg, chunk = validate_audio_chunk(message["bytes"])
+                if not ok:
+                    await websocket.send_json({"event": "error", "message": err_msg})
                     continue
 
                 # Accumulate into buffer
-                buffer = np.concatenate([buffer, chunk], axis=0)
+                buffer = accumulate_buffer(buffer, chunk)
                 chunk_size_samples = int(round(chunk_size_sec * sr))
 
+                # Send ack so client knows bytes were received (protocol parity with HTTP server)
+                await websocket.send_json(
+                    build_ack_event(received_samples=chunk.size, total_samples=buffer.size)
+                )
+
                 # Consume full chunks
-                while buffer.shape[0] >= chunk_size_samples:
-                    feed = buffer[:chunk_size_samples]
-                    buffer = buffer[chunk_size_samples:]
+                buffer, consumed = consume_full_chunks(buffer, chunk_size_samples)
+                for feed in consumed:
                     asr.streaming_transcribe(feed, state)
                     await websocket.send_json(
                         {
@@ -319,7 +322,7 @@ def parse_args():
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=32,
+        default=128,
         help="Max new tokens per streaming step.",
     )
     parser.add_argument(
@@ -357,12 +360,7 @@ def main():
 
     import uvicorn
 
-    uvicorn.run(
-        "deploy.vllm_streaming_server:app",
-        host=args.host,
-        port=args.port,
-        factory=False,
-    )
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

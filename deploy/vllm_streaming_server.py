@@ -26,7 +26,6 @@ import io
 import json
 import os
 import sys
-import tempfile
 import traceback
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -47,6 +46,13 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from qwen_asr.inference.utils import parse_asr_output
+from deploy.streaming_utils import (
+    accumulate_buffer,
+    build_ack_event,
+    build_started_event,
+    clean_duplicate_asr_prefixes,
+    validate_audio_chunk,
+)
 
 # Config globals
 _vllm_base_url: Optional[str] = None
@@ -209,14 +215,7 @@ async def websocket_stream(websocket: WebSocket):
                     language = payload.get("language") or None
                     started = True
                     buffer = np.zeros((0,), dtype=np.float32)
-                    await websocket.send_json(
-                        {
-                            "event": "started",
-                            "stream": stream_mode,
-                            "sample_rate": sr,
-                            "audio_format": "float32le_pcm_mono_16k",
-                        }
-                    )
+                    await websocket.send_json(build_started_event(stream=stream_mode))
 
                 elif event == "finish":
                     if not started:
@@ -248,11 +247,20 @@ async def websocket_stream(websocket: WebSocket):
                             # Stream SSE chunks back to WebSocket client
                             full_raw = ""
                             async for token, finish_reason in _parse_sse_stream(resp):
-                                full_raw += token
+                                prev_raw = full_raw
+                                next_raw = full_raw + token
+                                # Clean duplicate language<asr_text> prefixes that vLLM
+                                # intermittently re-emits during long-audio streaming.
+                                full_raw = clean_duplicate_asr_prefixes(next_raw)
+                                clean_token = (
+                                    full_raw[len(prev_raw) :]
+                                    if full_raw.startswith(prev_raw)
+                                    else token
+                                )
                                 await websocket.send_json(
                                     {
                                         "event": "token",
-                                        "token": token,
+                                        "token": clean_token,
                                         "text_so_far": full_raw,
                                     }
                                 )
@@ -305,30 +313,16 @@ async def websocket_stream(websocket: WebSocket):
                     )
                     continue
 
-                raw = message["bytes"]
-                if len(raw) % 4 != 0:
-                    await websocket.send_json(
-                        {
-                            "event": "error",
-                            "message": "Audio chunk must be float32 bytes (multiple of 4).",
-                        }
-                    )
+                ok, err_msg, chunk = validate_audio_chunk(message["bytes"])
+                if not ok:
+                    await websocket.send_json({"event": "error", "message": err_msg})
                     continue
 
-                chunk = np.frombuffer(raw, dtype=np.float32).reshape(-1).copy()
-                if chunk.size == 0:
-                    continue
-
-                buffer = np.concatenate([buffer, chunk], axis=0)
+                buffer = accumulate_buffer(buffer, chunk)
                 # In HTTP-backend mode, we only accumulate; no partial results until finish.
                 # Send back an ack so the client knows the chunk was received.
                 await websocket.send_json(
-                    {
-                        "event": "ack",
-                        "received_samples": chunk.size,
-                        "total_samples": buffer.size,
-                        "duration_sec": round(buffer.size / sr, 3),
-                    }
+                    build_ack_event(received_samples=chunk.size, total_samples=buffer.size)
                 )
 
             else:
@@ -385,12 +379,7 @@ def main():
 
     import uvicorn
 
-    uvicorn.run(
-        "deploy.vllm_streaming_server:app",
-        host=args.host,
-        port=args.port,
-        factory=False,
-    )
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

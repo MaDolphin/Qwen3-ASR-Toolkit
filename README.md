@@ -19,6 +19,7 @@
 - 技术改进说明：[doc/TECH_IMPROVEMENTS.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/TECH_IMPROVEMENTS.md)
 - 云端 API/WS 协议说明：[doc/cloud_api_ws_usage.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/cloud_api_ws_usage.md)
 - vLLM 迁移记录：[doc/vllm_migration.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/vllm_migration.md)
+- Streaming Server 改进记录：[doc/STREAMING_SERVER_IMPROVEMENTS.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/STREAMING_SERVER_IMPROVEMENTS.md)
 
 ## 核心能力
 

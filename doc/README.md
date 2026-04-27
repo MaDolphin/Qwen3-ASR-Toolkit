@@ -19,12 +19,14 @@
 - 开发者指南：[DEVELOPER_GUIDE.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/DEVELOPER_GUIDE.md)
 - 技术改进说明：[TECH_IMPROVEMENTS.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/TECH_IMPROVEMENTS.md)
 - vLLM 迁移记录：[vllm_migration.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/vllm_migration.md)
+- Streaming Server 改进记录：[STREAMING_SERVER_IMPROVEMENTS.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/STREAMING_SERVER_IMPROVEMENTS.md)
 
 建议阅读顺序：
 
 1. `DEVELOPER_GUIDE.md`
 2. `TECH_IMPROVEMENTS.md`
 3. `vllm_migration.md`
+4. `STREAMING_SERVER_IMPROVEMENTS.md`
 
 ## 目标读者建议
 
