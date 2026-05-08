@@ -360,7 +360,13 @@ def main():
 
     import uvicorn
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        ws_ping_interval=None,
+        ws_ping_timeout=None,
+    )
 
 
 if __name__ == "__main__":

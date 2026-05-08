@@ -60,7 +60,10 @@ setup(
             'qwen-asr-demo=qwen_asr.cli.demo:main',
             'qwen-asr-demo-streaming=qwen_asr.cli.demo_streaming:main',
             'qwen-asr-serve=qwen_asr.cli.serve:main',
-        ]
+        ],
+        'vllm.general_plugins': [
+            'qwen3_asr=qwen_asr.vllm_plugin:register_qwen3_asr_model',
+        ],
     },
     author='He Wang',
     author_email='hwang2001@mail.nwpu.edu.cn',

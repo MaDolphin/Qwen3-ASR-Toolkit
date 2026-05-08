@@ -47,9 +47,11 @@ from .utils import (
 )
 
 try:
-    from qwen_asr.core.vllm_backend import Qwen3ASRForConditionalGeneration
     from vllm import ModelRegistry
-    ModelRegistry.register_model("Qwen3ASRForConditionalGeneration", Qwen3ASRForConditionalGeneration)
+    ModelRegistry.register_model(
+        "Qwen3ASRForConditionalGeneration",
+        "qwen_asr.core.vllm_backend.qwen3_asr:Qwen3ASRForConditionalGeneration",
+    )
 except:
     pass
 

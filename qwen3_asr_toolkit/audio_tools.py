@@ -11,6 +11,43 @@ from silero_vad import get_speech_timestamps
 WAV_SAMPLE_RATE = 16000
 
 
+def _load_audio_with_pyav(file_path: str) -> np.ndarray:
+    import av
+
+    chunks = []
+    with av.open(file_path) as container:
+        stream = next((s for s in container.streams if s.type == 'audio'), None)
+        if stream is None:
+            raise RuntimeError('No audio stream found.')
+
+        resampler = av.audio.resampler.AudioResampler(
+            format='fltp',
+            layout='mono',
+            rate=WAV_SAMPLE_RATE,
+        )
+        for frame in container.decode(stream):
+            resampled = resampler.resample(frame)
+            if resampled is None:
+                continue
+            if not isinstance(resampled, list):
+                resampled = [resampled]
+            for audio_frame in resampled:
+                array = audio_frame.to_ndarray()
+                chunks.append(np.asarray(array, dtype=np.float32).reshape(-1))
+
+        flushed = resampler.resample(None)
+        if flushed is not None:
+            if not isinstance(flushed, list):
+                flushed = [flushed]
+            for audio_frame in flushed:
+                array = audio_frame.to_ndarray()
+                chunks.append(np.asarray(array, dtype=np.float32).reshape(-1))
+
+    if not chunks:
+        raise RuntimeError('Decoded audio is empty.')
+    return np.concatenate(chunks).astype(np.float32, copy=False)
+
+
 def load_audio(file_path: str) -> np.ndarray:
     try:
         if file_path.startswith(("http://", "https://")):
@@ -20,33 +57,39 @@ def load_audio(file_path: str) -> np.ndarray:
         return wav_data
     except Exception as e:
         print(e)
-        # After librosa fails, use a more powerful ffmpeg as a backup.
         try:
-            command = [
-                'ffmpeg',
-                '-i', file_path,
-                '-ar', str(WAV_SAMPLE_RATE),
-                '-ac', '1',
-                '-c:a', 'pcm_s16le',
-                '-f', 'wav',
-                '-'
-            ]
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            stdout_data, stderr_data = process.communicate()
+            return _load_audio_with_pyav(file_path)
+        except Exception as pyav_e:
+            # After librosa/PyAV fail, use a more powerful ffmpeg as a backup.
+            try:
+                command = [
+                    'ffmpeg',
+                    '-i', file_path,
+                    '-ar', str(WAV_SAMPLE_RATE),
+                    '-ac', '1',
+                    '-c:a', 'pcm_s16le',
+                    '-f', 'wav',
+                    '-'
+                ]
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout_data, stderr_data = process.communicate()
 
-            if process.returncode != 0:
-                raise RuntimeError(f"FFmpeg error processing local file: {stderr_data.decode('utf-8', errors='ignore')}")
+                if process.returncode != 0:
+                    raise RuntimeError(f"FFmpeg error processing local file: {stderr_data.decode('utf-8', errors='ignore')}")
 
-            with io.BytesIO(stdout_data) as data_io:
-                wav_data, sr = sf.read(data_io, dtype='float32')
+                with io.BytesIO(stdout_data) as data_io:
+                    wav_data, sr = sf.read(data_io, dtype='float32')
 
-            return wav_data
-        except Exception as ffmpeg_e:
-            raise RuntimeError(f"Failed to load audio from local file '{file_path}' even with ffmpeg. Error: {ffmpeg_e}")
+                return wav_data
+            except Exception as ffmpeg_e:
+                raise RuntimeError(
+                    f"Failed to load audio from local file '{file_path}' with librosa, PyAV, or ffmpeg. "
+                    f"PyAV error: {pyav_e}; ffmpeg error: {ffmpeg_e}"
+                )
 
 
 def process_vad(wav: np.ndarray, worker_vad_model, segment_threshold_s: int = 120, max_segment_threshold_s: int = 180) -> list[np.ndarray]:

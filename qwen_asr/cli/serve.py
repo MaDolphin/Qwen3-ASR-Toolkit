@@ -27,9 +27,11 @@ AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
 AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
 
 try:
-    from qwen_asr.core.vllm_backend import Qwen3ASRForConditionalGeneration
     from vllm import ModelRegistry
-    ModelRegistry.register_model("Qwen3ASRForConditionalGeneration", Qwen3ASRForConditionalGeneration)
+    ModelRegistry.register_model(
+        "Qwen3ASRForConditionalGeneration",
+        "qwen_asr.core.vllm_backend.qwen3_asr:Qwen3ASRForConditionalGeneration",
+    )
 except Exception as e:
     raise ImportError(
         "vLLM is not available, to use qwen-asr-serve, please install with: pip install qwen-asr[vllm]"
