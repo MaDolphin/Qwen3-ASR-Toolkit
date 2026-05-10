@@ -175,6 +175,7 @@ async def run_case(
     case_label: Optional[str],
     start_sec: float,
     duration_sec: Optional[float],
+    audio_data: Optional[np.ndarray] = None,
     chunk_ms: int,
     chunk_size_sec: float,
     unfixed_chunk_num: int,
@@ -188,7 +189,7 @@ async def run_case(
     context: str,
     language: Optional[str],
 ) -> Dict[str, Any]:
-    full_wav = load_audio(audio_path).astype(np.float32)
+    full_wav = audio_data.astype(np.float32, copy=False) if audio_data is not None else load_audio(audio_path).astype(np.float32)
     source_audio_duration_sec = len(full_wav) / WAV_SAMPLE_RATE
     start_sample = max(0, min(len(full_wav), int(round(start_sec * WAV_SAMPLE_RATE))))
     if duration_sec is None:
