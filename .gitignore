@@ -180,3 +180,9 @@ runtime/
 /test
 /data
 test/
+
+# Keep repository sample audio for smoke tests
+!sample/
+!sample/*.mp3
+!sample/*.m4a
+!sample/*.txt

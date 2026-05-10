@@ -1,26 +1,17 @@
 # coding=utf-8
-# Copyright 2026 The Alibaba Qwen team.
-# SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-def main():
+"""内嵌 qwen_asr 包的提示入口。
+
+生产服务请使用项目根命令 `qwen3-asr-native-server`。
+"""
+
+
+def main() -> None:
     print(
-        "qwen_asr package.\n"
-        "Use CLI entrypoints:\n"
-        "  - qwen-asr-demo\n"
-        "  - qwen-asr-demo-streaming\n"
-        "  - qwen-asr-serve\n"
+        "qwen_asr 是 Qwen3-ASR-Toolkit 内嵌的模型实现包。\n"
+        "生产服务入口：qwen3-asr-native-server\n"
+        "源码入口：deploy/vllm_streaming_server_native.py"
     )
+
 
 if __name__ == "__main__":
     main()

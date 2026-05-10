@@ -1,156 +1,253 @@
 # Qwen3-ASR-Toolkit
 
-一个面向云端部署的 Qwen3-ASR 工具集，支持：
+Qwen3-ASR-Toolkit 是面向生产部署的 Qwen3-ASR Native 服务项目。当前版本只保留一个官方服务入口：**Unified Native ASR Server**。
 
-- 离线语音转写：REST API + CLI
-- 实时语音转写：WebSocket + CLI
-- 长音频自动 VAD 切分，且单段严格不超过 `60s`
-- 可选接入 `Qwen3-ForcedAligner-0.6B` 做离线时间戳对齐
-- 基于 vLLM OpenAI 兼容接口调用 ASR 服务
+该服务在一个 GPU 进程中只加载一次 `Qwen3-ASR-1.7B`，同时提供：
 
-当前仓库已经内置了从上游迁出的 `qwen_asr/` 包和示例代码，不再依赖已删除的 `references/` 目录。
+- 离线 HTTP 转写：`POST /api/v1/offline/transcribe`
+- 在线 WebSocket 转写：`WS /ws/stream`
+- 健康检查：`GET /health`
 
-## 文档导航
+> 不要同时启动 `vllm serve models/Qwen3-ASR-1.7B` 和本项目 Native server。否则 `Qwen3-ASR-1.7B` 会加载两次，占用两份 GPU 显存。
 
-- 文档总索引：[doc/README.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/README.md)
-- 详细部署文档：[doc/DEPLOYMENT.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/DEPLOYMENT.md)
-- 使用说明文档：[doc/USAGE.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/USAGE.md)
-- 开发者指南：[doc/DEVELOPER_GUIDE.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/DEVELOPER_GUIDE.md)
-- 技术改进说明：[doc/TECH_IMPROVEMENTS.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/TECH_IMPROVEMENTS.md)
-- 云端 API/WS 协议说明：[doc/cloud_api_ws_usage.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/cloud_api_ws_usage.md)
-- vLLM 迁移记录：[doc/vllm_migration.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/vllm_migration.md)
-- Streaming Server 改进记录：[doc/STREAMING_SERVER_IMPROVEMENTS.md](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/doc/STREAMING_SERVER_IMPROVEMENTS.md)
+## 功能特性
 
-## 核心能力
+- 单进程、单模型实例：`Qwen3-ASR-1.7B` 只加载一次。
+- 离线长音频：复用 VAD 分段，默认目标段长 `45s`，最大单段 `60s`。
+- 在线实时转写：WebSocket 收音频、返回 `ack` / `partial` / `final`。
+- 长音频在线策略：推荐 `120s window + 0s overlap + 顺序 WebSocket session`。
+- 背压保护：服务端接收、推理、发送解耦，客户端验证脚本支持 inflight window。
+- Forced Aligner：默认禁用；可配置远端 forced aligner 服务。
 
-- 离线转写接口：`POST /api/v1/offline/transcribe`
-- 实时转写接口：`ws://<host>:<port>/ws/v1/realtime/transcribe`
-- 离线转写支持参数 `use_forced_aligner=true|false`
-- 实时转写不做对齐，只做准实时增量转写
-- `sample/` 目录内置真实测试音频
+## 环境要求
 
-## 当前项目结构
+- Linux + NVIDIA GPU。
+- 推荐显存：L20 级别或更高。
+- 推荐 Python：`3.11` / `3.12` / `3.13`。
+- 当前真实验证环境：`conda activate qwen-asr`，Python `3.13.5`，NVIDIA L20。
+
+如果 `vllm==0.14.0` 在某个 Python 版本没有可用 wheel，请优先创建 Python 3.11 或 3.12 环境。
+
+## 安装依赖
+
+```bash
+cd /workspace/project/Qwen3-ASR-Toolkit
+source $(conda info --base)/etc/profile.d/conda.sh
+conda activate qwen-asr
+
+python -m pip install -U pip setuptools wheel
+python -m pip install -r requirements.txt
+python -m pip install -e .
+```
+
+安装完成后应能看到正式命令：
+
+```bash
+which qwen3-asr-native-server
+qwen3-asr-native-server --help
+```
+
+## 下载模型
+
+模型文件不提交到 Git。请下载到 `models/` 目录：
+
+```bash
+pip install modelscope
+
+modelscope download \
+  --model 'Qwen/Qwen3-ASR-1.7B' \
+  --local_dir '/workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B'
+
+modelscope download \
+  --model 'Qwen/Qwen3-ForcedAligner-0.6B' \
+  --local_dir '/workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ForcedAligner-0.6B'
+```
+
+离线加载推荐环境变量：
+
+```bash
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export QWEN3_ASR_MODEL_PATH=/workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B
+export QWEN3_ALIGNER_MODEL_PATH=/workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ForcedAligner-0.6B
+```
+
+## 启动统一 Native 服务
+
+推荐使用正式命令：
+
+```bash
+qwen3-asr-native-server \
+  --host 0.0.0.0 \
+  --port 10012 \
+  --model-path /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B \
+  --gpu-memory-utilization 0.8 \
+  --max-new-tokens 128 \
+  --chunk-size-sec 1.0 \
+  --unfixed-chunk-num 2 \
+  --unfixed-token-num 5 \
+  --audio-queue-size 8 \
+  --send-queue-size 32 \
+  --decode-timeout-sec 0 \
+  --enable-offline-api \
+  --offline-num-threads 1 \
+  --vad-target-segment-s 45 \
+  --vad-max-segment-s 60 \
+  --max-concurrent-asr-jobs 1 \
+  --aligner-mode disabled
+```
+
+也可以使用脚本入口：
+
+```bash
+bash scripts/run_native_server.sh
+```
+
+或兼容方式：
+
+```bash
+python deploy/vllm_streaming_server_native.py --model-path models/Qwen3-ASR-1.7B --port 10012
+```
+
+## 健康检查
+
+```bash
+curl -s http://127.0.0.1:10012/health
+```
+
+关键字段：
+
+```json
+{
+  "status": "ok",
+  "capabilities": {
+    "offline_http": true,
+    "native_websocket": true,
+    "forced_aligner": "disabled",
+    "max_concurrent_asr_jobs": 1,
+    "asr_model_loaded_once": true
+  }
+}
+```
+
+## 离线 HTTP 转写
+
+```bash
+curl -X POST "http://127.0.0.1:10012/api/v1/offline/transcribe" \
+  -F "audio_file=@sample/sample_0.mp3" \
+  -F "context=" \
+  -F "use_forced_aligner=false"
+```
+
+长音频也使用同一接口。服务端会自动加载音频、重采样、VAD 分段，并保证单段不超过 `vad_max_segment_s`。
+
+## 在线 WebSocket 转写
+
+WebSocket 地址：
 
 ```text
-qwen3_asr_toolkit/    主工具实现（服务端、CLI、离线/实时转写、对齐客户端）
-qwen_asr/             从上游迁入的官方包
-doc/                  中文文档
-scripts/              部署与验证脚本
-sample/               真实测试音频
-tests/                单元测试
-examples/             上游示例快照
+ws://127.0.0.1:10012/ws/stream
 ```
 
-## 快速开始
+协议：
 
-### 1. 安装依赖
+1. 客户端发送 `start` JSON。
+2. 客户端发送 `float32le PCM mono 16k` 二进制音频 chunk。
+3. 服务端返回 `ack` 和 `partial`。
+4. 客户端发送 `finish`。
+5. 服务端返回 `final`。
+
+单窗口验证：
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
-pip install -e .
+python deploy/test_native_streaming_ws_harness.py \
+  --uri ws://127.0.0.1:10012/ws/stream \
+  --input sample/sample_2.m4a \
+  --reference sample/sample_2.txt \
+  --output runtime/native_validation/sample_2_120s.json \
+  --case-label sample_2_120s \
+  --start-sec 0 \
+  --duration-sec 120 \
+  --chunk-ms 500 \
+  --chunk-size-sec 1.0 \
+  --unfixed-chunk-num 2 \
+  --unfixed-token-num 5 \
+  --max-inflight-chunks 4 \
+  --send-timeout-sec 30 \
+  --ack-timeout-sec 120 \
+  --receive-timeout-sec 300 \
+  --realtime
 ```
 
-### 2. 配置 `.env`
+## 长音频在线转写策略
 
-项目根目录的 [`.env.example`](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/.env.example) 已给出模板。
-
-当前已验证可用的配置格式如下：
-
-```env
-OPENAI_API_KEY=your_asr_api_key
-OPENAI_BASE_URL=http://your-asr-host:10010/v1
-QWEN3_ASR_MODEL=Qwen3-ASR-1.7B
-
-QWEN3_ALIGNER_BASE_URL=http://your-aligner-host:10011
-QWEN3_ALIGNER_API_KEY=your_aligner_api_key
-QWEN3_ALIGNER_MODEL=Qwen3-ForcedAligner-0.6B
-
-QWEN3_ASR_NUM_THREADS=4
-QWEN3_ASR_VAD_TARGET_SEGMENT_S=45
-QWEN3_ASR_VAD_MAX_SEGMENT_S=60
-QWEN3_ASR_STREAM_DECODE_INTERVAL_MS=600
-QWEN3_ASR_STREAM_MIN_CHUNK_MS=200
-QWEN3_ASR_STREAM_FINALIZE_SILENCE_MS=600
-QWEN3_ASR_STREAM_MAX_SEGMENT_S=20
-QWEN3_ALIGNER_TIMEOUT_S=120
-QWEN3_ALIGNER_TIMESTAMP_SEGMENT_TIME_MS=80
-```
-
-### 3. 启动服务
+单个 WebSocket session 推荐不超过 `120s`。更长音频使用 windowed 方式：
 
 ```bash
-python -m qwen3_asr_toolkit.server --host 0.0.0.0 --port 18000
+python deploy/test_native_streaming_windowed_harness.py \
+  --uri ws://127.0.0.1:10012/ws/stream \
+  --input sample/sample_2.m4a \
+  --reference sample/sample_2.txt \
+  --output runtime/native_validation/sample_2_windowed.json \
+  --report runtime/native_validation/SAMPLE_2_WINDOWED_REPORT.md \
+  --case-dir runtime/native_validation/sample_2_windowed_cases \
+  --case-label sample_2_windowed \
+  --window-sec 120 \
+  --overlap-sec 0 \
+  --chunk-ms 500
 ```
 
-健康检查：
+注意：当前在线方案是服务层 windowed streaming，不声称是 KV-cache 级 true incremental streaming。
+
+## Forced Aligner
+
+默认：
 
 ```bash
-curl http://127.0.0.1:18000/health
+--aligner-mode disabled
 ```
 
-### 4. 运行离线 CLI
+此模式不会加载 `Qwen3-ForcedAligner-0.6B`。如果请求 `use_forced_aligner=true`，接口会返回 forced-aligner metadata，说明当前服务未启用对齐。
+
+如需启用远端 forced aligner，可使用：
 
 ```bash
-python -m qwen3_asr_toolkit.offline_cli \
-  -i sample/sample_0.mp3 \
-  -u http://127.0.0.1:18000/api/v1/offline/transcribe \
-  --use-forced-aligner \
-  --save-text
+--aligner-mode remote \
+--aligner-base-url http://127.0.0.1:10013 \
+--aligner-api-key EMPTY \
+--aligner-model-path Qwen3-ForcedAligner-0.6B
 ```
 
-### 5. 运行实时 CLI
+## 目录结构
+
+```text
+Qwen3-ASR-Toolkit/
+├── deploy/                 # Native server 和验证脚本
+├── doc/                    # 中文文档
+├── qwen3_asr_toolkit/       # 音频、离线分段、forced aligner 工具
+├── qwen_asr/                # 内嵌 Qwen3-ASR 模型实现和 vLLM 插件
+├── sample/                  # 样例音频和参考文本
+├── scripts/                 # 启动脚本
+└── tests/                   # 单元测试
+```
+
+## 不推荐使用的旧方式
+
+本项目不再推荐以下方式：
 
 ```bash
-python -m qwen3_asr_toolkit.realtime_cli \
-  -i sample/sample_0.mp3 \
-  -u ws://127.0.0.1:18000/ws/v1/realtime/transcribe \
-  --chunk-ms 300 \
-  --decode-interval-ms 600 \
-  --finalize-silence-ms 600
+vllm serve models/Qwen3-ASR-1.7B
+OPENAI_BASE_URL=http://... qwen3-asr-server
+qwen3-asr-offline-cli
+qwen3-asr-stream-cli
 ```
 
-## 部署脚本
+原因：这些旧路径会引入额外服务进程或旧协议，容易造成 `Qwen3-ASR-1.7B` 重复加载。
 
-已提供部署脚本：
+## 更多文档
 
-- [scripts/deploy_server.sh](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/scripts/deploy_server.sh)
-- [scripts/run_sample_tests.sh](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/scripts/run_sample_tests.sh)
-- `systemd` 示例：[deploy/systemd/qwen3-asr-toolkit.service](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/deploy/systemd/qwen3-asr-toolkit.service)
-
-常用命令：
-
-```bash
-bash scripts/deploy_server.sh install
-bash scripts/deploy_server.sh start
-bash scripts/deploy_server.sh status
-bash scripts/deploy_server.sh logs
-```
-
-## 实测结果摘要
-
-基于 `sample/` 中真实文件已完成联调验证：
-
-- `sample/sample_0.mp3`
-  - 离线转写正常
-  - 开启对齐后可返回词级时间戳
-- `sample/deutsch.mp3`
-  - 长音频会自动切分
-  - 最大切分长度小于 `60s`
-- `sample/sample_2.m4a`
-  - 可完成长音频离线转写
-- WebSocket 实时链路已完成增量转写验证
-
-## 说明
-
-- 如果只做离线/实时转写，不需要安装 `qwen_asr` 的完整额外依赖。
-- 如果要运行仓库内嵌的上游 `qwen_asr` 示例，可以安装：
-  - `pip install -e ".[qwen-asr]"`
-  - `pip install -e ".[qwen-asr-vllm]"`
-
-## 许可证
-
-- 本项目主代码遵循仓库根目录 [LICENSE](/Users/hhk/Github/Self/Qwen3-ASR-Toolkit/LICENSE)
-- 迁入的 `qwen_asr/` 与上游示例保留其原始许可证说明
+- `doc/MODEL_DOWNLOAD.md`：模型下载。
+- `doc/DEPLOYMENT.md`：部署说明。
+- `doc/API.md`：HTTP 和 WebSocket API。
+- `doc/ARCHITECTURE.md`：架构说明。
+- `doc/VALIDATION.md`：验证命令和验收标准。
