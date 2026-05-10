@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Generate a Markdown report from native streaming validation artifacts."""
+"""Generate Markdown reports from native streaming validation artifacts."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -41,7 +40,7 @@ def _run_command(args: List[str]) -> Dict[str, Any]:
 
 
 def _short_text(text: str, limit: int = 300) -> str:
-    text = (text or "").strip()
+    text = (text or "").strip().replace("`", "'")
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "…"
@@ -63,11 +62,22 @@ def _read_json(path: Optional[str]) -> Optional[Dict[str, Any]]:
     return json.loads(target.read_text(encoding="utf-8"))
 
 
+def _get_nested(data: Dict[str, Any], path: str, default: Any = None) -> Any:
+    current: Any = data
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return default
+        current = current[part]
+    return current
+
+
 def _sample_summary(case: Dict[str, Any]) -> Dict[str, Any]:
     config = case.get("config", {})
     final = case.get("final", {})
-    latency = case.get("latency", {})
-    counts = case.get("event_counts", {})
+    latency = case.get("latency", case.get("timing", {}))
+    timing = case.get("timing", latency)
+    counts = case.get("counts") or case.get("event_counts", {})
+    flow = case.get("flow_control", {})
     score = case.get("score") or {}
     reference_path = config.get("reference")
     reference_text = ""
@@ -75,25 +85,49 @@ def _sample_summary(case: Dict[str, Any]) -> Dict[str, Any]:
         reference_text = _strip_reference_language(
             Path(reference_path).read_text(encoding="utf-8")
         )
+    error_message = ""
+    if case.get("client_error"):
+        error_message = (case.get("client_error") or {}).get("message", "")
+    elif case.get("error"):
+        error_message = (case.get("error") or {}).get("message", "")
     return {
+        "case_label": case.get("case_label") or config.get("case_label") or Path(config.get("audio", "")).stem,
         "audio": config.get("audio", ""),
         "reference": reference_path,
-        "mode": config.get("mode", ""),
+        "mode": config.get("send_mode") or config.get("mode", ""),
         "chunk_ms": config.get("chunk_ms"),
+        "start_sec": case.get("start_sec", config.get("start_sec")),
+        "requested_duration_sec": case.get("requested_duration_sec", config.get("requested_duration_sec")),
+        "source_audio_duration_sec": case.get("source_audio_duration_sec", config.get("source_audio_duration_sec")),
+        "sent_duration_sec": case.get("sent_duration_sec", config.get("sent_duration_sec", case.get("audio_duration_sec"))),
         "audio_duration_sec": case.get("audio_duration_sec"),
-        "ack_count": counts.get("ack"),
-        "partial_count": counts.get("partial"),
-        "first_partial_sec": latency.get("first_partial_sec"),
-        "first_nonempty_partial_sec": latency.get("first_nonempty_partial_sec"),
-        "final_sec": latency.get("final_sec"),
+        "wall_elapsed_sec": case.get("wall_elapsed_sec", timing.get("wall_elapsed_sec")),
+        "chunks_sent": counts.get("chunks_sent"),
+        "ack_count": counts.get("ack_count", counts.get("ack")),
+        "partial_count": counts.get("partial_count", counts.get("partial")),
+        "error_count": counts.get("error_count", counts.get("error")),
+        "first_ack_sec": timing.get("first_ack_sec"),
+        "last_ack_sec": timing.get("last_ack_sec"),
+        "first_partial_sec": timing.get("first_partial_sec"),
+        "first_nonempty_partial_sec": timing.get("first_nonempty_partial_sec"),
+        "final_sec": timing.get("final_sec"),
+        "partial_interval_p50_sec": timing.get("partial_interval_p50_sec"),
+        "partial_interval_p95_sec": timing.get("partial_interval_p95_sec"),
         "final_text_len": final.get("text_len"),
         "language": final.get("language", ""),
+        "max_inflight_chunks": flow.get("max_inflight_chunks", config.get("max_inflight_chunks")),
+        "max_observed_inflight_chunks": flow.get("max_observed_inflight_chunks"),
+        "send_stall_count": flow.get("send_stall_count"),
+        "send_stall_total_sec": flow.get("send_stall_total_sec"),
+        "max_realtime_lag_sec": flow.get("max_realtime_lag_sec"),
+        "server_error_count": counts.get("error_count", counts.get("error")),
+        "client_error": (case.get("client_error") or {}).get("message"),
         "passed": case.get("passed"),
         "wer": score.get("wer"),
         "cer": score.get("cer"),
         "final_excerpt": _short_text(final.get("text", ""), 300),
         "reference_excerpt": _short_text(reference_text, 300),
-        "error": (case.get("error") or {}).get("message"),
+        "error": error_message,
     }
 
 
@@ -137,7 +171,7 @@ def _key_package_versions() -> str:
     return "\n".join(lines)
 
 
-def _tail_lines(path: Optional[str], limit: int = 60) -> str:
+def _tail_lines(path: Optional[str], limit: int = 80) -> str:
     if not path:
         return ""
     target = Path(path)
@@ -145,6 +179,14 @@ def _tail_lines(path: Optional[str], limit: int = 60) -> str:
         return ""
     lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(lines[-limit:])
+
+
+def _yes_no(value: Any) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "N/A"
 
 
 def build_report(
@@ -166,17 +208,17 @@ def build_report(
     notes: Optional[str],
 ) -> str:
     case_summaries = [_sample_summary(case) for case in cases]
-    all_passed = bool(case_summaries) and all(item["passed"] for item in case_summaries)
-    partial_supported = all(
+    all_passed = bool(case_summaries) and all(bool(item["passed"]) for item in case_summaries)
+    partial_supported = bool(case_summaries) and all(
         (item.get("partial_count") or 0) > 0 for item in case_summaries
-    ) if case_summaries else False
-    long_case = next(
-        (item for item in case_summaries if item.get("audio", "").endswith("sample_2.m4a")),
+    )
+    full_case = next(
+        (item for item in case_summaries if str(item.get("case_label", "")).endswith("full")),
         None,
     )
 
     lines: List[str] = []
-    lines.append("# Native Streaming Validation Report")
+    lines.append("# Sample 2 Native Streaming Realtime Ladder Report")
     lines.append("")
     lines.append(f"- Generated at: `{_utc_now()}`")
     lines.append(f"- Conda environment: `{env_name}`")
@@ -189,7 +231,10 @@ def build_report(
     lines.append(f"- GPU before load: `{_parse_gpu_csv(gpu_before)}`")
     lines.append(f"- GPU after load: `{_parse_gpu_csv(gpu_after_load)}`")
     lines.append(f"- GPU after all tests: `{_parse_gpu_csv(gpu_after_all)}`")
-    lines.append(f"- Key packages: `{package_info.get('stdout') or package_info.get('error') or 'N/A'}`")
+    lines.append("- Key packages:")
+    lines.append("```text")
+    lines.append(package_info.get("stdout") or package_info.get("error") or "N/A")
+    lines.append("```")
     lines.append("")
     lines.append("## 2. 服务配置")
     lines.append(f"- Host/port: `{config.get('host')}:{config.get('port')}`")
@@ -198,6 +243,9 @@ def build_report(
     lines.append(f"- `chunk_size_sec`: `{config.get('chunk_size_sec')}`")
     lines.append(f"- `unfixed_chunk_num`: `{config.get('unfixed_chunk_num')}`")
     lines.append(f"- `unfixed_token_num`: `{config.get('unfixed_token_num')}`")
+    lines.append(f"- `audio_queue_size`: `{config.get('audio_queue_size')}`")
+    lines.append(f"- `send_queue_size`: `{config.get('send_queue_size')}`")
+    lines.append(f"- `decode_timeout_sec`: `{config.get('decode_timeout_sec')}`")
     lines.append("")
     lines.append("## 3. 健康检查结果")
     lines.append(f"- HTTP status: `{health_status or 'N/A'}`")
@@ -211,64 +259,62 @@ def build_report(
     else:
         lines.append("- Body: `N/A`")
     lines.append("")
-    lines.append("## 4. 样本结果表")
-    lines.append("| 样本 | 模式 | 时长(s) | chunk-ms | ack | partial | 首 partial(s) | 首非空 partial(s) | final(s) | final 长度 | language | WER | CER | 通过 |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|")
+    lines.append("## 4. sample_2 阶梯结果表")
+    lines.append("| case | start(s) | requested(s) | sent(s) | wall(s) | chunks | ack | partial | first partial(s) | first non-empty(s) | final(s) | final len | lang | max inflight | max observed | stalls | stall total(s) | max lag(s) | passed |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---|")
     for item in case_summaries:
         lines.append(
-            "| `{audio}` | {mode} | {audio_duration_sec} | {chunk_ms} | {ack_count} | {partial_count} | {first_partial_sec} | {first_nonempty_partial_sec} | {final_sec} | {final_text_len} | {language} | {wer} | {cer} | {passed} |".format(
-                audio=item["audio"],
-                mode=item["mode"],
-                audio_duration_sec=item["audio_duration_sec"],
-                chunk_ms=item["chunk_ms"],
-                ack_count=item["ack_count"],
-                partial_count=item["partial_count"],
-                first_partial_sec=item["first_partial_sec"],
-                first_nonempty_partial_sec=item["first_nonempty_partial_sec"],
-                final_sec=item["final_sec"],
-                final_text_len=item["final_text_len"],
-                language=item["language"],
-                wer=item["wer"],
-                cer=item["cer"],
-                passed="yes" if item["passed"] else "no",
+            "| `{case_label}` | {start_sec} | {requested_duration_sec} | {sent_duration_sec} | {wall_elapsed_sec} | {chunks_sent} | {ack_count} | {partial_count} | {first_partial_sec} | {first_nonempty_partial_sec} | {final_sec} | {final_text_len} | {language} | {max_inflight_chunks} | {max_observed_inflight_chunks} | {send_stall_count} | {send_stall_total_sec} | {max_realtime_lag_sec} | {passed} |".format(
+                **{**item, "passed": _yes_no(item.get("passed"))}
             )
         )
     lines.append("")
-    lines.append("## 5. 文本输出摘要")
+    lines.append("## 5. partial 间隔与背压观察")
+    lines.append("| case | p50 partial interval(s) | p95 partial interval(s) | first ack(s) | last ack(s) | server errors | client error |")
+    lines.append("|---|---:|---:|---:|---:|---:|---|")
     for item in case_summaries:
-        lines.append(f"### `{item['audio']}`")
-        lines.append(f"- 通过: `{'yes' if item['passed'] else 'no'}`")
+        lines.append(
+            "| `{case_label}` | {partial_interval_p50_sec} | {partial_interval_p95_sec} | {first_ack_sec} | {last_ack_sec} | {server_error_count} | `{client_error}` |".format(
+                **{**item, "client_error": item.get("client_error") or ""}
+            )
+        )
+    lines.append("")
+    lines.append("## 6. final 文本摘要")
+    for item in case_summaries:
+        lines.append(f"### `{item['case_label']}`")
+        lines.append(f"- Audio: `{item['audio']}`")
+        lines.append(f"- 通过: `{_yes_no(item['passed'])}`")
         if item.get("error"):
             lines.append(f"- Error: `{item['error']}`")
         lines.append(f"- Final excerpt: `{item['final_excerpt']}`")
         lines.append(f"- Reference excerpt: `{item['reference_excerpt']}`")
     lines.append("")
-    lines.append("## 6. 关键结论")
+    lines.append("## 7. 关键结论")
     lines.append(
-        f"- Native WebSocket streaming 服务闭环: `{'通过' if all_passed else '未通过'}`"
+        f"- sample_2 阶梯真实时间 WebSocket 验证: `{'通过' if all_passed else '未通过'}`"
     )
     lines.append(
-        f"- 真实数据 partial 输出: `{'已观察到' if partial_supported else '未稳定观察到'}`"
+        f"- 真实时间 partial 输出: `{'已观察到' if partial_supported else '未稳定观察到'}`"
     )
-    if long_case:
+    if full_case:
         lines.append(
-            f"- 长音频 `sample_2.m4a` final 延迟: `{long_case.get('final_sec')}` 秒，partial 数量 `{long_case.get('partial_count')}`"
+            f"- 全量 case: `{'通过' if full_case.get('passed') else '未通过'}`，final 延迟 `{full_case.get('final_sec')}` 秒，最大实时落后 `{full_case.get('max_realtime_lag_sec')}` 秒。"
         )
     lines.append(
         "- True streaming 结论: `当前底层实现仍是累计音频重送 generate，不应表述为已确认 KV-cache 真增量 streaming`"
     )
     lines.append("")
-    lines.append("## 7. 已知限制")
-    lines.append(
-        "- `qwen_asr/inference/qwen3_asr.py` 当前 `streaming_transcribe()` 会把累计音频重新送入 `self.model.generate(...)`。"
-    )
+    lines.append("## 8. 已知限制")
+    lines.append("- `qwen_asr/inference/qwen3_asr.py` 当前 `streaming_transcribe()` 会把累计音频重新送入 `self.model.generate(...)`。")
     lines.append("- Native server 只提供 `partial`/`final`，没有 `segment_final`。")
     lines.append("- 当前验证关注服务层功能闭环与时延，不证明底层 KV cache 增量推理已生效。")
+    lines.append("- 无 token-level streaming。")
     lines.append("- 无 forced aligner 时间戳。")
     lines.append("")
-    lines.append("## 8. 后续建议")
-    lines.append("- 若需真正 KV-cache 增量 streaming，需要修改底层推理实现，而非仅调整服务端协议。")
-    lines.append("- 若 Python 3.13 与 `vllm==0.14.0` 不兼容，建议切到 Python 3.11/3.12 复测。")
+    lines.append("## 9. 后续建议")
+    lines.append("- 若 partial 间隔随音频累计显著增长，需要改底层增量推理。")
+    lines.append("- 若服务端队列仍满，需要进一步降低 chunk 频率或优化模型调用。")
+    lines.append("- 若全量真实时间能完成但延迟持续累积，应标记为服务可用但非低延迟真流式。")
     if notes:
         lines.append(f"- 附加备注: `{notes}`")
     if server_log_path:
@@ -304,6 +350,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunk-size-sec", type=float, default=1.0)
     parser.add_argument("--unfixed-chunk-num", type=int, default=2)
     parser.add_argument("--unfixed-token-num", type=int, default=5)
+    parser.add_argument("--audio-queue-size", type=int, default=8)
+    parser.add_argument("--send-queue-size", type=int, default=32)
+    parser.add_argument("--decode-timeout-sec", type=float, default=0.0)
     parser.add_argument("--notes", default=None)
     return parser.parse_args()
 
@@ -340,6 +389,9 @@ def main() -> None:
             "chunk_size_sec": args.chunk_size_sec,
             "unfixed_chunk_num": args.unfixed_chunk_num,
             "unfixed_token_num": args.unfixed_token_num,
+            "audio_queue_size": args.audio_queue_size,
+            "send_queue_size": args.send_queue_size,
+            "decode_timeout_sec": args.decode_timeout_sec,
         },
         notes=args.notes,
     )
