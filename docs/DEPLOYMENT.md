@@ -28,7 +28,7 @@ qwen3-asr-native-server --help
 
 ## 3. 下载模型
 
-详见 `doc/MODEL_DOWNLOAD.md`。
+详见 `docs/MODEL_DOWNLOAD.md`。
 
 ## 4. 启动服务
 
@@ -41,7 +41,7 @@ qwen3-asr-native-server \
   --host 0.0.0.0 \
   --port 10012 \
   --model-path /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B \
-  --gpu-memory-utilization 0.8 \
+  --gpu-memory-utilization 0.50 \
   --max-new-tokens 128 \
   --chunk-size-sec 1.0 \
   --unfixed-chunk-num 2 \
@@ -54,7 +54,7 @@ qwen3-asr-native-server \
   --vad-target-segment-s 45 \
   --vad-max-segment-s 60 \
   --max-concurrent-asr-jobs 1 \
-  --aligner-mode disabled
+  --aligner-mode remote
 ```
 
 脚本方式：
@@ -104,4 +104,51 @@ sudo systemctl status qwen3-asr-native-server
 
 ```bash
 journalctl -u qwen3-asr-native-server -f
+```
+
+## 一键部署两个模型
+
+```bash
+bash scripts/deploy_native_asr.sh
+```
+
+该脚本会启动两个服务：
+
+| 服务 | 地址 | 模型 |
+| --- | --- | --- |
+| ASR Native Server | `http://127.0.0.1:10012` | `models/Qwen3-ASR-1.7B` |
+| ForcedAligner vLLM Server | `http://127.0.0.1:10013` | `models/Qwen3-ForcedAligner-0.6B` |
+
+默认低显存参数：
+
+```text
+ASR_GPU_MEMORY_UTILIZATION=0.50
+ASR_KV_CACHE_MEMORY_BYTES=8G
+ALIGNER_GPU_MEMORY_UTILIZATION=0.10
+ALIGNER_KV_CACHE_MEMORY_BYTES=2G
+```
+
+停止服务：
+
+```bash
+bash scripts/stop_native_asr.sh
+```
+
+CLI 验证：
+
+```bash
+qwen3-asr-cli health
+qwen3-asr-offline-cli --input-file sample/sample_0.mp3
+qwen3-asr-stream-cli --input-file sample/sample_2.m4a --duration-sec 120 --realtime
+```
+
+## ForcedAligner 启动参数
+
+一键部署脚本使用 vLLM pooling 模式启动 ForcedAligner，关键参数如下：
+
+```bash
+--runner pooling \
+  --pooler-config '{"task":"token_classify"}' \
+  --hf-overrides '{"architectures":["Qwen3ASRForcedAlignerForTokenClassification"]}' \
+  --gpu-memory-utilization 0.10
 ```

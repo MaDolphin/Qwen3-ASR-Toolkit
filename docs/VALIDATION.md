@@ -33,10 +33,10 @@ qwen3-asr-native-server \
   --host 0.0.0.0 \
   --port 10012 \
   --model-path /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B \
-  --gpu-memory-utilization 0.8 \
+  --gpu-memory-utilization 0.50 \
   --enable-offline-api \
   --offline-num-threads 1 \
-  --aligner-mode disabled
+  --aligner-mode remote
 ```
 
 ## 4. Health 验证
@@ -158,3 +158,23 @@ ps -ef | grep -E "qwen3-asr-native-server|vllm_streaming_server_native|VLLM::Eng
 - 没有独立 `vllm serve models/Qwen3-ASR-1.7B`。
 - 没有第二个 Native server。
 - `Qwen3-ASR-1.7B` 只被当前服务加载一次。
+
+## CLI 验证
+
+```bash
+qwen3-asr-offline-cli \
+  --input-file sample/sample_0.mp3 \
+  --output-json runtime/validation/offline_cli.json
+
+qwen3-asr-stream-cli \
+  --input-file sample/sample_2.m4a \
+  --duration-sec 120 \
+  --output-json runtime/validation/ws_cli_120s.json \
+  --realtime
+```
+
+## 一键功能测试
+
+```bash
+bash scripts/test_native_asr_functional.sh
+```

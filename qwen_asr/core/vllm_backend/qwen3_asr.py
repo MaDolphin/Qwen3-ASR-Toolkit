@@ -43,9 +43,11 @@ from vllm.model_executor.layers.attention.mm_encoder_attention import (
 )
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
+    ReplicatedLinear,
     QKVParallelLinear,
     RowParallelLinear,
 )
+from vllm.model_executor.layers.pooler import DispatchPooler
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.model_executor.models.interfaces import (
     MultiModalEmbeddings,
@@ -873,6 +875,7 @@ class Qwen3ASRForConditionalGeneration(
 
         return loaded_weights
 
+
     def get_mrope_input_positions(
         self,
         input_tokens: list[int],
@@ -995,3 +998,64 @@ class Qwen3ASRForConditionalGeneration(
             "multi_modal_data": {"audio": audio},
         }
         return cast(PromptType, prompt_dict)
+
+
+class Qwen3ASRForcedAlignerForTokenClassification(
+    Qwen3ASRForConditionalGeneration,
+):
+    is_pooling_model = True
+
+    def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+        super().__init__(vllm_config=vllm_config, prefix=prefix)
+        self.vllm_config = vllm_config
+        if hasattr(self.language_model, "lm_head"):
+            delattr(self.language_model, "lm_head")
+        if hasattr(self, "logits_processor"):
+            delattr(self, "logits_processor")
+
+        self.score = ReplicatedLinear(
+            int(getattr(self.config, "hidden_size", 1024)),
+            thinker_config_classify_num(self.config),
+            bias=False,
+            params_dtype=vllm_config.model_config.head_dtype,
+            quant_config=vllm_config.quant_config,
+            return_bias=False,
+            prefix=maybe_prefix(prefix, "score"),
+        )
+        pooler_config = vllm_config.model_config.pooler_config
+        assert pooler_config is not None
+        self.pooler = DispatchPooler.for_seq_cls(pooler_config, classifier=self.score)
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        mapped_weights = []
+        for name, weight in weights:
+            if name.startswith("thinker.lm_head."):
+                mapped_weights.append((name.replace("thinker.lm_head.", "score."), weight))
+            elif name.startswith("lm_head."):
+                mapped_weights.append((name.replace("lm_head.", "score."), weight))
+            else:
+                mapped_weights.append((name, weight))
+
+        def load_score(name: str, weight: torch.Tensor) -> bool:
+            if name != "score.weight":
+                return False
+            param = self.score.weight
+            weight_loader = getattr(param, "weight_loader", default_weight_loader)
+            weight_loader(param, weight)
+            return True
+
+        base_weights = []
+        loaded = set()
+        for name, weight in mapped_weights:
+            if load_score(name, weight):
+                loaded.add(name)
+            else:
+                base_weights.append((name, weight))
+
+        loaded.update(super().load_weights(base_weights))
+        loaded.add("score.weight")
+        return loaded
+
+
+def thinker_config_classify_num(config) -> int:
+    return int(getattr(config, "classify_num", 5000))

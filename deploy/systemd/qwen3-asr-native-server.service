@@ -8,7 +8,7 @@ WorkingDirectory=/workspace/project/Qwen3-ASR-Toolkit
 Environment=HF_HUB_OFFLINE=1
 Environment=TRANSFORMERS_OFFLINE=1
 Environment=QWEN3_ASR_MODEL_PATH=/workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B
-ExecStart=/opt/conda/envs/qwen-asr/bin/qwen3-asr-native-server --host 0.0.0.0 --port 10012 --model-path /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B --gpu-memory-utilization 0.8 --enable-offline-api --offline-num-threads 1 --aligner-mode disabled
+ExecStart=/opt/conda/envs/qwen-asr/bin/qwen3-asr-native-server --host 0.0.0.0 --port 10012 --model-path /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B --gpu-memory-utilization 0.50 --kv-cache-memory-bytes 8GiB --max-model-len 65536 --enable-offline-api --offline-num-threads 1 --max-concurrent-asr-jobs 1 --aligner-mode remote --aligner-base-url http://127.0.0.1:10013 --aligner-api-key EMPTY --aligner-model-path Qwen3-ForcedAligner-0.6B
 Restart=on-failure
 RestartSec=5
 

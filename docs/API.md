@@ -188,3 +188,11 @@ float32le PCM, mono, 16000 Hz
   "message": "..."
 }
 ```
+
+## CLI 与 API 对应关系
+
+| 使用方式 | 底层接口 |
+| --- | --- |
+| `qwen3-asr-offline-cli` | `POST /api/v1/offline/transcribe` |
+| `qwen3-asr-stream-cli` | `WS /ws/stream` |
+| `qwen3-asr-cli health` | `GET /health` |

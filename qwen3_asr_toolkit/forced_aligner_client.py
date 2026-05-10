@@ -178,13 +178,17 @@ class RemoteForcedAlignerClient:
         if not text:
             return []
 
-        word_list, input_text = self.processor.encode_timestamp(text, language)
-        if not word_list or not input_text:
-            return []
-
         wav = np.asarray(wav, dtype=np.float32).reshape(-1)
         duration_sec = len(wav) / WAV_SAMPLE_RATE if len(wav) > 0 else 0.0
         audio_data_url = self._wav_to_data_url(wav)
+
+        direct = self._try_direct_align(audio_data_url=audio_data_url, text=text, language=language)
+        if direct is not None:
+            return self._clip_items(direct, duration_sec)
+
+        word_list, input_text = self.processor.encode_timestamp(text, language)
+        if not word_list or not input_text:
+            return []
 
         input_ids = self._tokenize(input_text)
         if self.timestamp_token_id is None:
@@ -204,6 +208,38 @@ class RemoteForcedAlignerClient:
             output.append(
                 {
                     "text": item["text"],
+                    "start_time": round(start_sec, 3),
+                    "end_time": round(end_sec, 3),
+                }
+            )
+        return output
+
+    def _try_direct_align(self, audio_data_url: str, text: str, language: str) -> Optional[List[Dict]]:
+        payload = {
+            "model": self.model,
+            "audio": audio_data_url,
+            "text": text,
+            "language": language,
+        }
+        try:
+            response = self._post_json(["/align", "/v1/align"], payload)
+        except RuntimeError as exc:
+            if "Endpoint not found" in str(exc) or "No valid forced aligner endpoint" in str(exc):
+                return None
+            raise
+        items = response.get("items", [])
+        if not isinstance(items, list):
+            raise RuntimeError(f"Unexpected align response: {response}")
+        return items
+
+    def _clip_items(self, items: List[Dict], duration_sec: float) -> List[Dict]:
+        output = []
+        for item in items:
+            start_sec = max(0.0, min(duration_sec, float(item.get("start_time", 0.0))))
+            end_sec = max(start_sec, min(duration_sec, float(item.get("end_time", start_sec))))
+            output.append(
+                {
+                    "text": str(item.get("text", "")),
                     "start_time": round(start_sec, 3),
                     "end_time": round(end_sec, 3),
                 }

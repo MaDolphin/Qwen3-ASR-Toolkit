@@ -24,6 +24,7 @@ INSTALL_REQUIRES = [
     "scipy",
     "vllm==0.14.0",
     "modelscope",
+    "setuptools<81.0.0,>=77.0.3",
 ]
 
 setup(
@@ -41,6 +42,9 @@ setup(
     entry_points={
         "console_scripts": [
             "qwen3-asr-native-server=deploy.vllm_streaming_server_native:main",
+            "qwen3-asr-offline-cli=qwen3_asr_toolkit.offline_cli:main",
+            "qwen3-asr-stream-cli=qwen3_asr_toolkit.realtime_cli:main",
+            "qwen3-asr-cli=qwen3_asr_toolkit.cli:main",
         ],
         "vllm.general_plugins": [
             "qwen3_asr=qwen_asr.vllm_plugin:register_qwen3_asr_model",

@@ -52,8 +52,13 @@ from qwen3_asr_toolkit.offline_transcriber import OfflineTranscriber
 # Qwen3ASRModel is imported lazily to allow health endpoint even if vLLM is absent
 _qwen_asr_model = None
 _model_path: Optional[str] = None
-_gpu_memory_utilization: float = 0.8
+_gpu_memory_utilization: float = 0.5
 _max_new_tokens: int = 128
+_kv_cache_memory_bytes: Optional[int] = None
+_cpu_offload_gb: float = 0.0
+_dtype: str = "auto"
+_max_model_len: int = 65536
+_enforce_eager: bool = False
 _default_chunk_size_sec: float = 1.0
 _default_unfixed_chunk_num: int = 2
 _default_unfixed_token_num: int = 5
@@ -82,6 +87,44 @@ class AudioQueueItem:
     received_samples: int = 0
     total_samples: int = 0
     received_at: float = 0.0
+
+
+
+def _parse_size_bytes(value: str | int | None) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    raw = str(value).strip()
+    if raw == "" or raw == "0":
+        return None
+    lower = raw.lower().replace(" ", "")
+    units = [
+        ("gib", 1024 ** 3),
+        ("gb", 1024 ** 3),
+        ("g", 1024 ** 3),
+        ("mib", 1024 ** 2),
+        ("mb", 1024 ** 2),
+        ("m", 1024 ** 2),
+        ("kib", 1024),
+        ("kb", 1024),
+        ("k", 1024),
+    ]
+    for suffix, multiplier in units:
+        if lower.endswith(suffix):
+            number = float(lower[: -len(suffix)])
+            return int(number * multiplier)
+    return int(lower)
+
+
+def _format_size_bytes(value: Optional[int]) -> Optional[str]:
+    if value is None:
+        return None
+    if value % (1024 ** 3) == 0:
+        return f"{value // (1024 ** 3)}GiB"
+    if value % (1024 ** 2) == 0:
+        return f"{value // (1024 ** 2)}MiB"
+    return str(value)
 
 
 class NativeQwenASRAdapter:
@@ -151,10 +194,20 @@ def _load_model():
 
     model_path = _model_path or os.environ.get("QWEN3_ASR_MODEL_PATH", "Qwen/Qwen3-ASR-1.7B")
     print(f"[Model] Loading Qwen3-ASR from: {model_path}")
+    llm_kwargs: dict[str, Any] = {
+        "gpu_memory_utilization": _gpu_memory_utilization,
+        "max_new_tokens": _max_new_tokens,
+        "cpu_offload_gb": _cpu_offload_gb,
+        "dtype": _dtype,
+        "max_model_len": _max_model_len,
+        "enforce_eager": _enforce_eager,
+    }
+    if _kv_cache_memory_bytes is not None:
+        llm_kwargs["kv_cache_memory_bytes"] = _kv_cache_memory_bytes
+
     _qwen_asr_model = Qwen3ASRModel.LLM(
         model=model_path,
-        gpu_memory_utilization=_gpu_memory_utilization,
-        max_new_tokens=_max_new_tokens,
+        **llm_kwargs,
     )
     print("[Model] Loaded successfully.")
     return _qwen_asr_model
@@ -170,6 +223,13 @@ def _capabilities() -> dict[str, Any]:
         "offline_num_threads": _offline_num_threads,
         "vad_target_segment_s": _vad_target_segment_s,
         "vad_max_segment_s": _vad_max_segment_s,
+        "gpu_memory_utilization": _gpu_memory_utilization,
+        "kv_cache_memory_bytes": _kv_cache_memory_bytes,
+        "kv_cache_memory_human": _format_size_bytes(_kv_cache_memory_bytes),
+        "cpu_offload_gb": _cpu_offload_gb,
+        "max_model_len": _max_model_len,
+        "dtype": _dtype,
+        "enforce_eager": _enforce_eager,
     }
 
 
@@ -610,8 +670,38 @@ def parse_args():
     parser.add_argument(
         "--gpu-memory-utilization",
         type=float,
-        default=0.8,
-        help="vLLM GPU memory utilization.",
+        default=float(os.environ.get("QWEN3_ASR_GPU_MEMORY_UTILIZATION", "0.5")),
+        help="vLLM GPU memory utilization. Low-memory default is 0.5.",
+    )
+    parser.add_argument(
+        "--kv-cache-memory-bytes",
+        type=str,
+        default=os.environ.get("QWEN3_ASR_KV_CACHE_MEMORY_BYTES", ""),
+        help="Exact vLLM KV cache limit, e.g. 8GiB or 8192MiB. Empty uses vLLM default.",
+    )
+    parser.add_argument(
+        "--cpu-offload-gb",
+        type=float,
+        default=float(os.environ.get("QWEN3_ASR_CPU_OFFLOAD_GB", "0")),
+        help="vLLM CPU offload in GiB.",
+    )
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default=os.environ.get("QWEN3_ASR_DTYPE", "auto"),
+        help="vLLM dtype, e.g. auto, bfloat16, float16.",
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=int(os.environ.get("QWEN3_ASR_MAX_MODEL_LEN", "65536")),
+        help="vLLM max model length.",
+    )
+    parser.add_argument(
+        "--enforce-eager",
+        action="store_true",
+        default=os.environ.get("QWEN3_ASR_ENFORCE_EAGER", "0") in {"1", "true", "TRUE", "yes", "YES"},
+        help="Disable CUDA graph capture for lower-memory troubleshooting.",
     )
     parser.add_argument(
         "--max-new-tokens",
@@ -726,6 +816,7 @@ def parse_args():
 
 def main():
     global _model_path, _gpu_memory_utilization, _max_new_tokens
+    global _kv_cache_memory_bytes, _cpu_offload_gb, _dtype, _max_model_len, _enforce_eager
     global _default_chunk_size_sec, _default_unfixed_chunk_num, _default_unfixed_token_num
     global _audio_queue_size, _send_queue_size, _decode_timeout_sec
     global _enable_offline_api, _offline_num_threads, _vad_target_segment_s, _vad_max_segment_s
@@ -736,6 +827,11 @@ def main():
     args = parse_args()
     _model_path = args.model_path or os.environ.get("QWEN3_ASR_MODEL_PATH")
     _gpu_memory_utilization = args.gpu_memory_utilization
+    _kv_cache_memory_bytes = _parse_size_bytes(args.kv_cache_memory_bytes)
+    _cpu_offload_gb = float(args.cpu_offload_gb)
+    _dtype = args.dtype
+    _max_model_len = int(args.max_model_len)
+    _enforce_eager = bool(args.enforce_eager)
     _max_new_tokens = args.max_new_tokens
     _default_chunk_size_sec = args.chunk_size_sec
     _default_unfixed_chunk_num = args.unfixed_chunk_num
