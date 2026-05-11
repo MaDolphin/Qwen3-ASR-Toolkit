@@ -9,6 +9,7 @@ import numpy as np
 import websockets
 
 from qwen3_asr_toolkit.audio_tools import WAV_SAMPLE_RATE, load_audio
+from qwen3_asr_toolkit.cli_utils import build_stream_ws_url
 
 DEFAULT_WS_URL = "ws://127.0.0.1:10012/ws/stream"
 
@@ -22,7 +23,13 @@ class StreamCliError(RuntimeError):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="调用 Qwen3-ASR Native WebSocket 服务进行在线转写。")
     parser.add_argument("--input-file", "-i", required=True, help="输入音频/视频文件路径。")
-    parser.add_argument("--ws-url", "-u", default=DEFAULT_WS_URL, help="Native WebSocket 地址。")
+    parser.add_argument("--server", default="", help="Native 服务 base URL，例如 http://服务器IP:10012。")
+    parser.add_argument(
+        "--ws-url",
+        "-u",
+        default="",
+        help=f"Native WebSocket 地址；优先级高于 --server，默认 {DEFAULT_WS_URL}。",
+    )
     parser.add_argument("--context", "-c", default="", help="ASR 上下文提示。")
     parser.add_argument("--start-sec", type=float, default=0.0, help="从音频第几秒开始发送。")
     parser.add_argument("--duration-sec", type=float, default=None, help="只发送指定秒数音频。")
@@ -45,7 +52,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    return build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        args.ws_url = args.ws_url or build_stream_ws_url(args.server)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def build_start_payload(args: argparse.Namespace) -> dict[str, Any]:

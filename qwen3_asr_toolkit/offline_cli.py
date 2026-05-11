@@ -7,6 +7,8 @@ from typing import Any, Sequence
 
 import requests
 
+from qwen3_asr_toolkit.cli_utils import build_offline_api_url
+
 DEFAULT_API_URL = "http://127.0.0.1:10012/api/v1/offline/transcribe"
 
 
@@ -19,7 +21,13 @@ class CliError(RuntimeError):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="调用 Qwen3-ASR Native 服务进行离线 HTTP 转写。")
     parser.add_argument("--input-file", "-i", required=True, help="输入音频/视频文件路径。")
-    parser.add_argument("--api-url", "-u", default=DEFAULT_API_URL, help="离线转写 API 地址。")
+    parser.add_argument("--server", default="", help="Native 服务 base URL，例如 http://服务器IP:10012。")
+    parser.add_argument(
+        "--api-url",
+        "-u",
+        default="",
+        help=f"离线转写 API 地址；优先级高于 --server，默认 {DEFAULT_API_URL}。",
+    )
     parser.add_argument("--context", "-c", default="", help="ASR 上下文提示。")
     parser.add_argument("--use-forced-aligner", action="store_true", help="请求 forced aligner 时间戳。")
     parser.add_argument("--timeout-sec", type=float, default=1800.0, help="HTTP 请求超时时间。")
@@ -39,7 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    return build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        args.api_url = args.api_url or build_offline_api_url(args.server)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def _write_text(path: str | os.PathLike[str], text: str) -> None:

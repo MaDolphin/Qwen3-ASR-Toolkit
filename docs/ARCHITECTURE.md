@@ -68,7 +68,7 @@ sender_task:
 默认部署面向已被其他模型占用部分显存的 L20：
 
 ```text
-ASR gpu_memory_utilization=0.50
+ASR gpu_memory_utilization=0.30
 ASR kv_cache_memory_bytes=8G
 ForcedAligner gpu_memory_utilization=0.10
 ForcedAligner kv_cache_memory_bytes=2G

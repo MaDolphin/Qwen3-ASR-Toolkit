@@ -6,15 +6,17 @@ from typing import Sequence
 import requests
 
 from qwen3_asr_toolkit import offline_cli, realtime_cli
+from qwen3_asr_toolkit.cli_utils import DEFAULT_SERVER_URL, normalize_server_url
 
-DEFAULT_BASE_URL = "http://127.0.0.1:10012"
+DEFAULT_BASE_URL = DEFAULT_SERVER_URL
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Qwen3-ASR Native 服务命令行客户端。")
     subparsers = parser.add_subparsers(dest="command")
     health = subparsers.add_parser("health", help="检查 Native 服务健康状态。")
-    health.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Native 服务 HTTP base URL。")
+    health.add_argument("--server", default="", help="Native 服务 base URL，例如 http://服务器IP:10012。")
+    health.add_argument("--base-url", default="", help="Native 服务 HTTP base URL；优先级高于 --server。")
     health.add_argument("--timeout-sec", type=float, default=30.0, help="HTTP 超时。")
     subparsers.add_parser("offline", help="离线 HTTP 转写；更多参数见 `qwen3-asr-cli offline --help`。")
     subparsers.add_parser("stream", help="在线 WebSocket 转写；更多参数见 `qwen3-asr-cli stream --help`。")
@@ -33,10 +35,16 @@ def run_health(argv: Sequence[str] | argparse.Namespace) -> None:
         args = argv
     else:
         parser = argparse.ArgumentParser(description="检查 Native 服务健康状态。")
-        parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Native 服务 HTTP base URL。")
+        parser.add_argument("--server", default="", help="Native 服务 base URL，例如 http://服务器IP:10012。")
+        parser.add_argument("--base-url", default="", help="Native 服务 HTTP base URL；优先级高于 --server。")
         parser.add_argument("--timeout-sec", type=float, default=30.0, help="HTTP 超时。")
         args = parser.parse_args(list(argv))
-    url = args.base_url.rstrip("/") + "/health"
+    try:
+        base_url = args.base_url or normalize_server_url(getattr(args, "server", ""))
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    url = base_url.rstrip("/") + "/health"
     response = requests.get(url, timeout=args.timeout_sec)
     response.raise_for_status()
     print(json.dumps(response.json(), ensure_ascii=False, indent=2))

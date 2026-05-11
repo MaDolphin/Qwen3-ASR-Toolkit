@@ -22,8 +22,11 @@ fi
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$PROJECT_DIR"
 
-CONDA_ENV="${CONDA_ENV:-qwen-asr}"
-activate_conda_env
+if [[ -n "${CONDA_ENV:-}" ]]; then
+  activate_conda_env
+else
+  echo "Using current Python environment: $(command -v python)"
+fi
 
 ASR_BASE_URL="${ASR_BASE_URL:-http://127.0.0.1:10012}"
 ALIGNER_BASE_URL="${ALIGNER_BASE_URL:-http://127.0.0.1:10013}"
@@ -37,19 +40,19 @@ printf '{"status":"ok","endpoint":"%s/health"}\n' "$ALIGNER_BASE_URL" > "$OUT_DI
 
 qwen3-asr-offline-cli \
   --input-file sample/sample_0.mp3 \
-  --api-url "$ASR_BASE_URL/api/v1/offline/transcribe" \
+  --server "$ASR_BASE_URL" \
   --output-json "$OUT_DIR/offline_cli_sample_0.json" \
   --output-text "$OUT_DIR/offline_cli_sample_0.txt"
 
 qwen3-asr-offline-cli \
   --input-file sample/sample_0.mp3 \
-  --api-url "$ASR_BASE_URL/api/v1/offline/transcribe" \
+  --server "$ASR_BASE_URL" \
   --use-forced-aligner \
   --output-json "$OUT_DIR/offline_cli_sample_0_aligned.json"
 
 qwen3-asr-offline-cli \
   --input-file sample/sample_2.m4a \
-  --api-url "$ASR_BASE_URL/api/v1/offline/transcribe" \
+  --server "$ASR_BASE_URL" \
   --output-json "$OUT_DIR/offline_cli_sample_2.json" \
   --quiet
 
@@ -74,7 +77,7 @@ python deploy/test_native_streaming_ws_harness.py \
 
 qwen3-asr-stream-cli \
   --input-file sample/sample_2.m4a \
-  --ws-url "${ASR_BASE_URL/http:/ws:}/ws/stream" \
+  --server "$ASR_BASE_URL" \
   --duration-sec 120 \
   --output-json "$OUT_DIR/ws_cli_sample_2_120s.json" \
   --event-jsonl "$OUT_DIR/ws_cli_sample_2_120s_events.jsonl" \

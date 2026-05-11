@@ -44,21 +44,31 @@ CLI / HTTP / WebSocket
 一键部署会自动检查依赖、下载模型并启动两个服务：
 
 ```bash
-bash scripts/deploy_native_asr.sh
+bash scripts/deploy_native_asr.sh --conda-env qwen-asr
+```
+
+使用当前已激活环境部署：
+
+```bash
+conda activate qwen-asr
+bash scripts/deploy_native_asr.sh --no-conda-activate
 ```
 
 默认服务地址：
 
 ```text
-ASR HTTP:       http://127.0.0.1:10012
-ASR WebSocket:  ws://127.0.0.1:10012/ws/stream
-ForcedAligner:  http://127.0.0.1:10013
+ASR local:      http://127.0.0.1:10012
+ASR remote:     http://服务器IP:10012
+WS local:       ws://127.0.0.1:10012/ws/stream
+WS remote:      ws://服务器IP:10012/ws/stream
+Aligner local:  http://127.0.0.1:10013
+Aligner remote: http://服务器IP:10013
 ```
 
 默认低显存参数：
 
 ```text
-ASR_GPU_MEMORY_UTILIZATION=0.50
+ASR_GPU_MEMORY_UTILIZATION=0.30
 ASR_KV_CACHE_MEMORY_BYTES=8G
 ASR_CPU_OFFLOAD_GB=0
 ASR_MAX_MODEL_LEN=65536
@@ -116,7 +126,7 @@ qwen3-asr-native-server \
   --host 0.0.0.0 \
   --port 10012 \
   --model-path /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B \
-  --gpu-memory-utilization 0.50 \
+  --gpu-memory-utilization 0.30 \
   --kv-cache-memory-bytes 8G \
   --max-model-len 65536 \
   --max-new-tokens 128 \
@@ -135,12 +145,14 @@ qwen3-asr-native-server \
 
 ```bash
 qwen3-asr-cli health
+qwen3-asr-cli health --server http://服务器IP:10012
 ```
 
 ### 离线转写
 
 ```bash
 qwen3-asr-offline-cli \
+  --server http://服务器IP:10012 \
   --input-file sample/sample_0.mp3 \
   --output-json runtime/cli_sample_0.json \
   --output-text runtime/cli_sample_0.txt
@@ -150,6 +162,7 @@ qwen3-asr-offline-cli \
 
 ```bash
 qwen3-asr-offline-cli \
+  --server http://服务器IP:10012 \
   --input-file sample/sample_0.mp3 \
   --use-forced-aligner \
   --output-json runtime/cli_sample_0_aligned.json
@@ -159,6 +172,7 @@ qwen3-asr-offline-cli \
 
 ```bash
 qwen3-asr-stream-cli \
+  --server http://服务器IP:10012 \
   --input-file sample/sample_2.m4a \
   --duration-sec 120 \
   --output-json runtime/cli_sample_2_120s.json \
@@ -170,10 +184,12 @@ qwen3-asr-stream-cli \
 ```bash
 qwen3-asr-cli offline --input-file sample/sample_0.mp3
 qwen3-asr-cli stream --input-file sample/sample_2.m4a --duration-sec 120
-qwen3-asr-cli health --base-url http://127.0.0.1:10012
+qwen3-asr-cli health --server http://服务器IP:10012
 ```
 
 ## HTTP API 使用方式
+
+本机访问使用 `127.0.0.1`，远程访问将地址替换为 `服务器IP:10012`：
 
 ```bash
 curl -X POST "http://127.0.0.1:10012/api/v1/offline/transcribe" \
@@ -187,7 +203,8 @@ curl -X POST "http://127.0.0.1:10012/api/v1/offline/transcribe" \
 WebSocket 地址：
 
 ```text
-ws://127.0.0.1:10012/ws/stream
+本机访问：ws://127.0.0.1:10012/ws/stream
+远程访问：ws://服务器IP:10012/ws/stream
 ```
 
 客户端发送 `start`，再发送 `float32le PCM mono 16k` 音频 chunk，最后发送 `finish`。服务端返回 `started`、`ack`、`partial`、`final` 或 `error`。
@@ -212,6 +229,8 @@ python deploy/test_native_streaming_windowed_harness.py \
 
 ## 功能测试
 
+完整功能测试命令：
+
 ```bash
 bash scripts/test_native_asr_functional.sh
 ```
@@ -221,6 +240,29 @@ bash scripts/test_native_asr_functional.sh
 ```text
 runtime/native_deploy_validation/FUNCTIONAL_TEST_REPORT.md
 ```
+
+当前 L20 环境已完成真实功能验证：
+
+| 测试项 | 结果 | 关键指标 |
+| --- | --- | --- |
+| Health | 通过 | ASR `status=ok`，ForcedAligner 可访问 |
+| 离线短音频 | 通过 | `sample_0.mp3` 文本非空，`segments=1` |
+| 离线 ForcedAligner | 通过 | `available=true`，返回 token 时间戳条目 |
+| 离线长音频 | 通过 | `sample_2.m4a` 文本非空，VAD 分段完成 |
+| WebSocket 120s harness | 通过 | `chunks=240`，`ack=240`，`partials=239`，`final` 非空 |
+| WebSocket 120s CLI | 通过 | `chunks=240`，`ack=240`，`partials=239`，`final` 非空 |
+| CLI 远程参数 | 通过 | `--server http://服务器IP:10012` 可自动推导 HTTP/WS 地址 |
+
+本次低显存参数实测显存参考：
+
+```text
+启动前：4 MiB used
+ForcedAligner 启动后：4635 MiB used
+ASR 启动后：19350 MiB used
+完整功能测试后：26004 MiB used
+```
+
+说明：显存占用会受到 vLLM KV cache、CUDA graph、请求峰值和其他进程影响，生产部署时请以 `nvidia-smi` 实测为准。
 
 ## 目录结构
 

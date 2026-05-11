@@ -16,8 +16,11 @@ activate_conda_env() {
 
 cd "$(dirname "$0")/.."
 
-CONDA_ENV="${CONDA_ENV:-qwen-asr}"
-activate_conda_env
+if [[ -n "${CONDA_ENV:-}" ]]; then
+  activate_conda_env
+else
+  echo "Using current Python environment: $(command -v python)"
+fi
 
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
@@ -27,7 +30,7 @@ qwen3-asr-native-server \
   --host "${QWEN3_ASR_HOST:-0.0.0.0}" \
   --port "${QWEN3_ASR_PORT:-10012}" \
   --model-path "$QWEN3_ASR_MODEL_PATH" \
-  --gpu-memory-utilization "${QWEN3_ASR_GPU_MEMORY_UTILIZATION:-0.50}" \
+  --gpu-memory-utilization "${QWEN3_ASR_GPU_MEMORY_UTILIZATION:-0.30}" \
   --kv-cache-memory-bytes "${QWEN3_ASR_KV_CACHE_MEMORY_BYTES:-8G}" \
   --cpu-offload-gb "${QWEN3_ASR_CPU_OFFLOAD_GB:-0}" \
   --max-model-len "${QWEN3_ASR_MAX_MODEL_LEN:-65536}" \

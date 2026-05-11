@@ -41,7 +41,7 @@ qwen3-asr-native-server \
   --host 0.0.0.0 \
   --port 10012 \
   --model-path /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ASR-1.7B \
-  --gpu-memory-utilization 0.50 \
+  --gpu-memory-utilization 0.30 \
   --max-new-tokens 128 \
   --chunk-size-sec 1.0 \
   --unfixed-chunk-num 2 \
@@ -109,20 +109,26 @@ journalctl -u qwen3-asr-native-server -f
 ## 一键部署两个模型
 
 ```bash
-bash scripts/deploy_native_asr.sh
+bash scripts/deploy_native_asr.sh --conda-env qwen-asr --asr-host 0.0.0.0 --aligner-host 0.0.0.0
+```
+
+使用当前环境部署：
+
+```bash
+bash scripts/deploy_native_asr.sh --no-conda-activate
 ```
 
 该脚本会启动两个服务：
 
 | 服务 | 地址 | 模型 |
 | --- | --- | --- |
-| ASR Native Server | `http://127.0.0.1:10012` | `models/Qwen3-ASR-1.7B` |
-| ForcedAligner vLLM Server | `http://127.0.0.1:10013` | `models/Qwen3-ForcedAligner-0.6B` |
+| ASR Native Server | `http://服务器IP:10012` | `models/Qwen3-ASR-1.7B` |
+| ForcedAligner vLLM Server | `http://服务器IP:10013` | `models/Qwen3-ForcedAligner-0.6B` |
 
 默认低显存参数：
 
 ```text
-ASR_GPU_MEMORY_UTILIZATION=0.50
+ASR_GPU_MEMORY_UTILIZATION=0.30
 ASR_KV_CACHE_MEMORY_BYTES=8G
 ALIGNER_GPU_MEMORY_UTILIZATION=0.10
 ALIGNER_KV_CACHE_MEMORY_BYTES=2G
@@ -137,9 +143,9 @@ bash scripts/stop_native_asr.sh
 CLI 验证：
 
 ```bash
-qwen3-asr-cli health
-qwen3-asr-offline-cli --input-file sample/sample_0.mp3
-qwen3-asr-stream-cli --input-file sample/sample_2.m4a --duration-sec 120 --realtime
+qwen3-asr-cli health --server http://服务器IP:10012
+qwen3-asr-offline-cli --server http://服务器IP:10012 --input-file sample/sample_0.mp3
+qwen3-asr-stream-cli --server http://服务器IP:10012 --input-file sample/sample_2.m4a --duration-sec 120 --realtime
 ```
 
 ## ForcedAligner 启动参数
@@ -152,3 +158,9 @@ qwen3-asr-stream-cli --input-file sample/sample_2.m4a --duration-sec 120 --realt
   --hf-overrides '{"architectures":["Qwen3ASRForcedAlignerForTokenClassification"]}' \
   --gpu-memory-utilization 0.10
 ```
+
+## 远程访问端口
+
+- 远程访问至少需要开放 ASR 端口 `10012`。
+- 如果需要直接访问 ForcedAligner，再开放 `10013`。
+- ASR 内部调用 ForcedAligner 默认仍可使用 `127.0.0.1:10013`。

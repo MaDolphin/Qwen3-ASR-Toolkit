@@ -7,7 +7,7 @@ Type=simple
 WorkingDirectory=/workspace/project/Qwen3-ASR-Toolkit
 Environment=HF_HUB_OFFLINE=1
 Environment=TRANSFORMERS_OFFLINE=1
-ExecStart=/opt/conda/envs/qwen-asr/bin/python -m deploy.forced_aligner_server --host 127.0.0.1 --port 10013 --model /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ForcedAligner-0.6B --served-model-name Qwen3-ForcedAligner-0.6B --runner pooling --pooler-config '{"task":"token_classify"}' --hf-overrides '{"architectures":["Qwen3ASRForcedAlignerForTokenClassification"]}' --gpu-memory-utilization 0.10 --kv-cache-memory-bytes 2G --cpu-offload-gb 0 --disable-log-requests
+ExecStart=/opt/conda/envs/qwen-asr/bin/python -m deploy.forced_aligner_server --host 0.0.0.0 --port 10013 --model /workspace/project/Qwen3-ASR-Toolkit/models/Qwen3-ForcedAligner-0.6B --served-model-name Qwen3-ForcedAligner-0.6B --runner pooling --pooler-config '{"task":"token_classify"}' --hf-overrides '{"architectures":["Qwen3ASRForcedAlignerForTokenClassification"]}' --gpu-memory-utilization 0.10 --kv-cache-memory-bytes 2G --cpu-offload-gb 0 --disable-log-requests
 Restart=on-failure
 RestartSec=5
 

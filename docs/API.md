@@ -193,6 +193,6 @@ float32le PCM, mono, 16000 Hz
 
 | 使用方式 | 底层接口 |
 | --- | --- |
-| `qwen3-asr-offline-cli` | `POST /api/v1/offline/transcribe` |
-| `qwen3-asr-stream-cli` | `WS /ws/stream` |
-| `qwen3-asr-cli health` | `GET /health` |
+| `qwen3-asr-offline-cli --server http://服务器IP:10012` | `POST /api/v1/offline/transcribe` |
+| `qwen3-asr-stream-cli --server http://服务器IP:10012` | `WS /ws/stream` |
+| `qwen3-asr-cli health --server http://服务器IP:10012` | `GET /health` |

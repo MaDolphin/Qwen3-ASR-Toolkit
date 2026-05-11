@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from qwen3_asr_toolkit import cli, offline_cli, realtime_cli
+from qwen3_asr_toolkit.cli_utils import build_offline_api_url, build_stream_ws_url, normalize_server_url
 
 
 class CliClientTests(unittest.TestCase):
@@ -18,6 +19,46 @@ class CliClientTests(unittest.TestCase):
         self.assertEqual(args.ws_url, "ws://127.0.0.1:10012/ws/stream")
         self.assertEqual(args.chunk_ms, 500)
         self.assertEqual(args.max_inflight_chunks, 4)
+
+
+    def test_server_url_builders(self):
+        self.assertEqual(normalize_server_url("1.2.3.4:10012"), "http://1.2.3.4:10012")
+        self.assertEqual(
+            build_offline_api_url("http://1.2.3.4:10012"),
+            "http://1.2.3.4:10012/api/v1/offline/transcribe",
+        )
+        self.assertEqual(build_stream_ws_url("http://1.2.3.4:10012"), "ws://1.2.3.4:10012/ws/stream")
+        self.assertEqual(build_stream_ws_url("https://asr.example.com"), "wss://asr.example.com/ws/stream")
+
+    def test_offline_cli_server_url(self):
+        args = offline_cli.parse_args(["--server", "http://1.2.3.4:10012", "--input-file", "sample/sample_0.mp3"])
+        self.assertEqual(args.api_url, "http://1.2.3.4:10012/api/v1/offline/transcribe")
+
+    def test_offline_cli_api_url_overrides_server(self):
+        args = offline_cli.parse_args([
+            "--server",
+            "http://1.2.3.4:10012",
+            "--api-url",
+            "http://9.9.9.9:10012/custom",
+            "--input-file",
+            "sample/sample_0.mp3",
+        ])
+        self.assertEqual(args.api_url, "http://9.9.9.9:10012/custom")
+
+    def test_realtime_cli_server_url(self):
+        args = realtime_cli.parse_args(["--server", "http://1.2.3.4:10012", "--input-file", "sample/sample_2.m4a"])
+        self.assertEqual(args.ws_url, "ws://1.2.3.4:10012/ws/stream")
+
+    def test_realtime_cli_ws_url_overrides_server(self):
+        args = realtime_cli.parse_args([
+            "--server",
+            "http://1.2.3.4:10012",
+            "--ws-url",
+            "ws://9.9.9.9:10012/custom",
+            "--input-file",
+            "sample/sample_2.m4a",
+        ])
+        self.assertEqual(args.ws_url, "ws://9.9.9.9:10012/custom")
 
     def test_realtime_start_payload_uses_native_protocol(self):
         args = argparse.Namespace(
@@ -53,8 +94,27 @@ class CliClientTests(unittest.TestCase):
         response.json.return_value = {"status": "ok"}
         response.raise_for_status.return_value = None
         with patch("qwen3_asr_toolkit.cli.requests.get", return_value=response) as get:
-            cli.run_health(argparse.Namespace(base_url="http://127.0.0.1:10012", timeout_sec=3))
+            cli.run_health(argparse.Namespace(server="", base_url="http://127.0.0.1:10012", timeout_sec=3))
         self.assertEqual(get.call_args.args[0], "http://127.0.0.1:10012/health")
+
+    def test_health_uses_server_url(self):
+        response = Mock()
+        response.json.return_value = {"status": "ok"}
+        response.raise_for_status.return_value = None
+        with patch("qwen3_asr_toolkit.cli.requests.get", return_value=response) as get:
+            cli.run_health(argparse.Namespace(server="http://1.2.3.4:10012", base_url="", timeout_sec=3))
+        self.assertEqual(get.call_args.args[0], "http://1.2.3.4:10012/health")
+
+    def test_deploy_script_help_mentions_remote_defaults(self):
+        import subprocess
+
+        result = subprocess.run(["bash", "scripts/deploy_native_asr.sh", "--help"], text=True, capture_output=True, check=True)
+        self.assertIn("--conda-env", result.stdout)
+        self.assertIn("--no-conda-activate", result.stdout)
+        self.assertIn("--asr-host", result.stdout)
+        self.assertIn("--aligner-host", result.stdout)
+        self.assertIn("0.30", result.stdout)
+        self.assertIn("0.10", result.stdout)
 
     def test_size_parser(self):
         from deploy.vllm_streaming_server_native import _parse_size_bytes
