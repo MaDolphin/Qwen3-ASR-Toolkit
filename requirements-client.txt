@@ -1,4 +1,5 @@
 gradio
+librosa
 numpy
 soundfile
 websockets

@@ -40,6 +40,7 @@ setup(
         "native": INSTALL_REQUIRES,
         "client": [
             "gradio",
+            "librosa",
             "numpy",
             "soundfile",
             "websockets",

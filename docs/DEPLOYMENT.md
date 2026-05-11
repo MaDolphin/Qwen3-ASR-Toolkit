@@ -200,7 +200,46 @@ qwen3-asr-gradio \
 http://服务器IP:7860
 ```
 
-远程访问时至少需要开放 ASR 服务端口 `10012` 和 Gradio 端口 `7860`。
+远程访问时至少需要开放 ASR 服务端口 `10012` 和 Gradio 端口 `7860`。如果要在远程浏览器中使用麦克风，还需要 HTTPS 或 Gradio share；本机调试请使用 `http://127.0.0.1:7860` 或 `http://localhost:7860`。
+
+连接远端 HTTP/WS 模型服务并在本机调试麦克风：
+
+```bash
+qwen3-asr-gradio \
+  --host 127.0.0.1 \
+  --port 7860 \
+  --api-url http://172.28.245.150:10010/api/v1/offline/transcribe \
+  --ws-url ws://172.28.245.150:10010/ws/stream
+```
+
+部署在服务器并通过远程 IP 使用浏览器麦克风：
+
+```bash
+qwen3-asr-gradio \
+  --host 0.0.0.0 \
+  --port 7860 \
+  --api-url http://172.28.245.150:10010/api/v1/offline/transcribe \
+  --ws-url ws://172.28.245.150:10010/ws/stream \
+  --ssl-certfile /etc/qwen3-asr/gradio.crt \
+  --ssl-keyfile /etc/qwen3-asr/gradio.key
+```
+
+浏览器打开 `https://服务器IP:7860`。生产环境建议使用可信证书或内网 CA 签发证书；自签证书仅适合内网调试。
+
+`.env` 驱动部署可使用：
+
+```bash
+QWEN3_GRADIO_HOST=0.0.0.0
+QWEN3_GRADIO_PORT=7860
+QWEN3_GRADIO_SERVER=http://172.28.245.150:10010
+QWEN3_GRADIO_SSL_CERTFILE=/etc/qwen3-asr/gradio.crt
+QWEN3_GRADIO_SSL_KEYFILE=/etc/qwen3-asr/gradio.key
+QWEN3_GRADIO_SSL_NO_VERIFY=0
+QWEN3_GRADIO_REALTIME_LANGUAGE_1=Chinese
+QWEN3_GRADIO_REALTIME_LANGUAGE_2=English
+```
+
+实时 Tab 的会议语言预设最多两种。只配置一种时，客户端会通过 WebSocket start payload 的 `language` 字段强制该语言；配置两种时，客户端会把这两种语言追加到 context 中，适合中英双语会议等场景。
 
 
 ## .env 驱动部署

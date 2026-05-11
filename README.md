@@ -263,7 +263,33 @@ qwen3-asr-cli health --server http://服务器IP:10012
 
 ## Gradio Web UI
 
-Gradio 只作为客户端访问已部署的 Native ASR 服务，不加载 ASR 模型。默认监听 `0.0.0.0:7860`，方便远程浏览器访问。
+Gradio 只作为客户端访问已部署的 Native ASR 服务，不加载 ASR 模型。服务器部署时建议让 Gradio 监听 `0.0.0.0`，由 `.env` 中的 `QWEN3_GRADIO_SERVER` 指向本机 ASR Native Server。
+
+推荐的服务器端口规划：
+
+```text
+ASR Native Server:     http://127.0.0.1:10010
+ForcedAligner Server:  http://127.0.0.1:10011
+Gradio Web UI:         http://服务器IP:10012
+```
+
+对应 `.env`：
+
+```bash
+QWEN3_GRADIO_ENABLE=1
+QWEN3_GRADIO_HOST=0.0.0.0
+QWEN3_GRADIO_PORT=10012
+QWEN3_GRADIO_SHARE=0
+QWEN3_GRADIO_SERVER=http://127.0.0.1:10010
+
+QWEN3_GRADIO_SSL_CERTFILE=
+QWEN3_GRADIO_SSL_KEYFILE=
+QWEN3_GRADIO_SSL_KEYFILE_PASSWORD=
+QWEN3_GRADIO_SSL_NO_VERIFY=0
+
+QWEN3_GRADIO_REALTIME_LANGUAGE_1=Chinese
+QWEN3_GRADIO_REALTIME_LANGUAGE_2=English
+```
 
 安装客户端依赖：
 
@@ -273,19 +299,124 @@ pip install -r requirements-client.txt
 pip install -e .[client]
 ```
 
-启动 Web UI：
+### 随一键部署启动
+
+一键部署会在 ASR 和 ForcedAligner 启动成功后自动启动 Gradio：
+
+```bash
+bash scripts/deploy_native_asr.sh
+```
+
+启动后检查：
+
+```bash
+curl -fsS http://127.0.0.1:10012 | head
+tail -f logs/gradio_server.log
+```
+
+浏览器访问：
+
+```text
+http://服务器IP:10012
+```
+
+如果沿用 `.env.example` 默认端口，则 Gradio 地址是 `http://服务器IP:7860`。
+
+### 再次手动启动 Gradio
+
+如果 ASR Native Server 已经运行，只想单独重启 Gradio，不需要重新加载模型。
+
+进入项目并激活环境：
+
+```bash
+cd /data/ai_work/qwen3-asr-toolkit
+conda activate qwen-asr
+```
+
+确认 ASR 正常：
+
+```bash
+curl -fsS http://127.0.0.1:10010/health
+```
+
+停止旧 Gradio 进程：
+
+```bash
+pid_file=runtime/native_deploy/gradio_server.pid
+if [ -f "$pid_file" ]; then
+  pid="$(cat "$pid_file")"
+  kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+  rm -f "$pid_file"
+fi
+```
+
+检查端口是否空闲：
+
+```bash
+ss -ltnp | grep ':10012' || true
+```
+
+后台启动 Gradio：
+
+```bash
+mkdir -p runtime/native_deploy logs
+
+setsid qwen3-asr-gradio \
+  --server http://127.0.0.1:10010 \
+  --host 0.0.0.0 \
+  --port 10012 \
+  --realtime-language-1 Chinese \
+  --realtime-language-2 English \
+  > logs/gradio_server.log 2>&1 &
+
+echo $! > runtime/native_deploy/gradio_server.pid
+```
+
+前台启动适合临时调试日志：
 
 ```bash
 qwen3-asr-gradio \
-  --server http://服务器IP:10012 \
+  --server http://127.0.0.1:10010 \
   --host 0.0.0.0 \
-  --port 7860
+  --port 10012 \
+  --realtime-language-1 Chinese \
+  --realtime-language-2 English
 ```
 
-功能：
+### 浏览器麦克风
+
+远程浏览器通过普通 HTTP 访问服务器 IP 时，Chrome 默认会阻止麦克风。内网调试可以使用 Chrome 临时信任方案，实时转写页面也会显示同样步骤：
+
+```bash
+chrome://flags/#unsafely-treat-insecure-origin-as-secure
+```
+
+在该配置项中填入：
+
+```text
+http://服务器IP:10012
+```
+
+设置为 `Enabled` 后点击 `Relaunch` 重启浏览器，再重新打开 Gradio 页面并授权麦克风。
+
+正式多人使用建议改用 HTTPS 或可信内网网关。
+
+### 常见问题
+
+如果一键部署后 Gradio 没有起来，优先查看：
+
+```bash
+tail -100 logs/gradio_server.log
+ss -ltnp | grep ':10012' || true
+```
+
+如果日志出现 `Cannot find empty port in range: 10012-10012`，说明 Gradio 端口被占用。停止占用进程，或在 `.env` 中改用其他端口，例如 `QWEN3_GRADIO_PORT=10014`。
+
+功能概览：
 
 - 离线 Tab：上传音频文件，调用 `POST /api/v1/offline/transcribe`。
 - 实时 Tab：浏览器授权麦克风，Gradio 后端连接 `WS /ws/stream`，持续展示 partial，停止后展示 final。
+- 会议语言预设最多两种。只选一种时通过 WebSocket `language` 字段强制单语言；选择两种时写入 context，引导模型只在这两种语言中识别。
 
 ## Python examples
 

@@ -96,18 +96,50 @@ wait_for_http() {
   local output="$2"
   local log_file="$3"
   local timeout_sec="${4:-360}"
+  local insecure="${5:-0}"
   local tries=$((timeout_sec / 2))
+  local curl_args=(-fsS)
+  if [[ "$insecure" == "1" ]]; then
+    curl_args+=(-k)
+  fi
   [[ "$tries" -lt 1 ]] && tries=1
   for _ in $(seq 1 "$tries"); do
-    if curl -fsS "$url" > "$output" 2>/dev/null; then
+    if curl "${curl_args[@]}" "$url" > "$output" 2>/dev/null; then
       return 0
     fi
     sleep 2
   done
-  curl -fsS "$url" > "$output" || {
+  curl "${curl_args[@]}" "$url" > "$output" || {
     tail -100 "$log_file" >&2 || true
     return 1
   }
+}
+
+print_tcp_port_listeners() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null | awk -v port=":$port" '$4 ~ port {print}' >&2 || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >&2 || true
+  fi
+}
+
+ensure_tcp_port_available() {
+  local port="$1"
+  local name="$2"
+  if command -v ss >/dev/null 2>&1; then
+    if ss -ltn 2>/dev/null | awk -v port=":$port" '$4 ~ port {found=1} END {exit found ? 0 : 1}'; then
+      echo "$name port $port is already in use." >&2
+      print_tcp_port_listeners "$port"
+      return 1
+    fi
+  elif command -v lsof >/dev/null 2>&1; then
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "$name port $port is already in use." >&2
+      print_tcp_port_listeners "$port"
+      return 1
+    fi
+  fi
 }
 
 start_process_if_needed() {
@@ -279,9 +311,26 @@ if [[ "${QWEN3_GRADIO_ENABLE:-1}" == "1" ]]; then
   if [[ -f "$RUNTIME_DIR/gradio_server.pid" ]] && kill -0 "$(cat "$RUNTIME_DIR/gradio_server.pid")" 2>/dev/null; then
     echo "Gradio already running: $(cat "$RUNTIME_DIR/gradio_server.pid")"
   else
+    ensure_tcp_port_available "$GRADIO_PORT" "Gradio"
     GRADIO_SHARE_ARGS=()
     if [[ "${QWEN3_GRADIO_SHARE:-0}" == "1" ]]; then
       GRADIO_SHARE_ARGS+=(--share)
+    fi
+    GRADIO_SSL_ARGS=()
+    GRADIO_HEALTH_SCHEME=http
+    if [[ -n "${QWEN3_GRADIO_SSL_CERTFILE:-}" || -n "${QWEN3_GRADIO_SSL_KEYFILE:-}" ]]; then
+      if [[ -z "${QWEN3_GRADIO_SSL_CERTFILE:-}" || -z "${QWEN3_GRADIO_SSL_KEYFILE:-}" ]]; then
+        echo "QWEN3_GRADIO_SSL_CERTFILE and QWEN3_GRADIO_SSL_KEYFILE must be configured together." >&2
+        exit 1
+      fi
+      GRADIO_SSL_ARGS+=(--ssl-certfile "$QWEN3_GRADIO_SSL_CERTFILE" --ssl-keyfile "$QWEN3_GRADIO_SSL_KEYFILE")
+      GRADIO_HEALTH_SCHEME=https
+    fi
+    if [[ -n "${QWEN3_GRADIO_SSL_KEYFILE_PASSWORD:-}" ]]; then
+      GRADIO_SSL_ARGS+=(--ssl-keyfile-password "$QWEN3_GRADIO_SSL_KEYFILE_PASSWORD")
+    fi
+    if [[ "${QWEN3_GRADIO_SSL_NO_VERIFY:-0}" == "1" ]]; then
+      GRADIO_SSL_ARGS+=(--ssl-no-verify)
     fi
     setsid qwen3-asr-gradio \
       --server "${QWEN3_GRADIO_SERVER:-http://127.0.0.1:$ASR_PORT}" \
@@ -290,12 +339,15 @@ if [[ "${QWEN3_GRADIO_ENABLE:-1}" == "1" ]]; then
       --chunk-size-sec "${QWEN3_ASR_CHUNK_SIZE_SEC:-1.0}" \
       --unfixed-chunk-num "${QWEN3_ASR_UNFIXED_CHUNK_NUM:-2}" \
       --unfixed-token-num "${QWEN3_ASR_UNFIXED_TOKEN_NUM:-5}" \
+      --realtime-language-1 "${QWEN3_GRADIO_REALTIME_LANGUAGE_1:-Chinese}" \
+      --realtime-language-2 "${QWEN3_GRADIO_REALTIME_LANGUAGE_2:-English}" \
       "${GRADIO_SHARE_ARGS[@]}" \
+      "${GRADIO_SSL_ARGS[@]}" \
       > "$LOG_DIR/gradio_server.log" 2>&1 &
     echo $! > "$RUNTIME_DIR/gradio_server.pid"
   fi
   ln -sfn "$LOG_DIR/gradio_server.log" "$RUNTIME_DIR/gradio_server.log"
-  wait_for_http "http://$GRADIO_HEALTH_HOST:$GRADIO_PORT" "$RUNTIME_DIR/health_gradio.html" "$LOG_DIR/gradio_server.log" 180
+  wait_for_http "$GRADIO_HEALTH_SCHEME://$GRADIO_HEALTH_HOST:$GRADIO_PORT" "$RUNTIME_DIR/health_gradio.html" "$LOG_DIR/gradio_server.log" 180 "${QWEN3_GRADIO_SSL_NO_VERIFY:-0}"
   nvidia-smi --query-gpu=name,memory.total,memory.used,memory.free --format=csv,noheader,nounits > "$RUNTIME_DIR/gpu_after_gradio.txt" || true
 fi
 

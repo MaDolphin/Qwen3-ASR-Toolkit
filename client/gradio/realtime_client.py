@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import threading
 from dataclasses import dataclass, field
@@ -51,6 +52,8 @@ class RealtimeWSClient:
         unfixed_chunk_num: int = 2,
         unfixed_token_num: int = 5,
         receive_timeout_sec: float = 300.0,
+        language: str = "",
+        proxy: str | None = None,
     ):
         self.ws_url = ws_url
         self.context = context
@@ -58,13 +61,15 @@ class RealtimeWSClient:
         self.unfixed_chunk_num = unfixed_chunk_num
         self.unfixed_token_num = unfixed_token_num
         self.receive_timeout_sec = receive_timeout_sec
+        self.language = language.strip()
+        self.proxy = proxy
         self.metrics = RealtimeMetrics()
         self._websocket = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
 
     def build_start_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "event": "start",
             "stream": True,
             "context": self.context,
@@ -72,6 +77,9 @@ class RealtimeWSClient:
             "unfixed_chunk_num": self.unfixed_chunk_num,
             "unfixed_token_num": self.unfixed_token_num,
         }
+        if self.language:
+            payload["language"] = self.language
+        return payload
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is not None and self._loop.is_running():
@@ -92,10 +100,16 @@ class RealtimeWSClient:
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result(timeout=self.receive_timeout_sec + 30.0)
 
+    def _connect_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"max_size": None, "ping_interval": None}
+        if "proxy" in inspect.signature(websockets.connect).parameters:
+            kwargs["proxy"] = self.proxy
+        return kwargs
+
     async def _ensure_started(self) -> dict[str, Any]:
         if self._websocket is not None and self.metrics.started:
             return self.metrics.last_event
-        self._websocket = await websockets.connect(self.ws_url, max_size=None, ping_interval=None)
+        self._websocket = await websockets.connect(self.ws_url, **self._connect_kwargs())
         await self._websocket.send(json.dumps(self.build_start_payload(), ensure_ascii=False))
         message = await asyncio.wait_for(self._websocket.recv(), timeout=self.receive_timeout_sec)
         event = json.loads(message)

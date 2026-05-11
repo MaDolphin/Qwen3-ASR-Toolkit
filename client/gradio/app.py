@@ -10,6 +10,55 @@ from client.gradio.offline_client import OfflineTranscribeError, transcribe_offl
 from client.gradio.realtime_client import RealtimeClientError, RealtimeWSClient
 
 
+HTTP_MIC_ACCESS_STEPS = """
+## 内网 HTTP 访问麦克风设置
+
+如果你通过 `http://服务器IP:端口` 访问本页面且浏览器无法录音，请在 Chrome 中按下面步骤开启临时信任：
+
+1. 打开 `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+2. 在输入框中填写当前 Gradio 地址，例如 `http://服务器IP:10012`
+3. 将该实验项设置为 `Enabled`
+4. 点击 Chrome 右下角的 `Relaunch` 重启浏览器
+5. 重新打开 `http://服务器IP:10012`，允许麦克风权限后再开始实时转写
+
+这是内网调试方案。正式多人使用时，建议改用 HTTPS 或可信内网网关。
+""".strip()
+
+AUTO_LANGUAGE = "自动识别"
+SUPPORTED_LANGUAGES = [
+    "Chinese",
+    "English",
+    "Cantonese",
+    "Arabic",
+    "German",
+    "French",
+    "Spanish",
+    "Portuguese",
+    "Indonesian",
+    "Italian",
+    "Korean",
+    "Russian",
+    "Thai",
+    "Vietnamese",
+    "Japanese",
+    "Turkish",
+    "Hindi",
+    "Malay",
+    "Dutch",
+    "Swedish",
+    "Danish",
+    "Finnish",
+    "Polish",
+    "Czech",
+    "Filipino",
+    "Persian",
+    "Greek",
+    "Romanian",
+    "Hungarian",
+    "Macedonian",
+]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Qwen3-ASR Gradio 客户端。")
     parser.add_argument("--server", default="http://127.0.0.1:10012", help="Native ASR 服务地址。")
@@ -18,12 +67,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="0.0.0.0", help="Gradio 监听地址。")
     parser.add_argument("--port", type=int, default=7860, help="Gradio 监听端口。")
     parser.add_argument("--share", action="store_true", help="启用 Gradio share。")
+    parser.add_argument("--ssl-keyfile", default="", help="HTTPS 私钥文件路径；远程 IP 使用麦克风时建议配置。")
+    parser.add_argument("--ssl-certfile", default="", help="HTTPS 证书文件路径；远程 IP 使用麦克风时建议配置。")
+    parser.add_argument("--ssl-keyfile-password", default="", help="HTTPS 私钥密码。")
+    parser.add_argument("--ssl-no-verify", action="store_true", help="禁用 Gradio SSL 证书校验，适合内网自签证书调试。")
     parser.add_argument("--chunk-ms", type=int, default=500, help="实时音频 chunk 毫秒数。")
     parser.add_argument("--chunk-size-sec", type=float, default=1.0)
     parser.add_argument("--unfixed-chunk-num", type=int, default=2)
     parser.add_argument("--unfixed-token-num", type=int, default=5)
     parser.add_argument("--receive-timeout-sec", type=float, default=300.0)
+    parser.add_argument("--realtime-language-1", default="Chinese", help="实时会议语言预设 1；留空或设为 自动识别 表示自动识别。")
+    parser.add_argument("--realtime-language-2", default="English", help="实时会议语言预设 2；最多两种语言。")
     return parser
+
+
+def _launch_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "server_name": args.host,
+        "server_port": args.port,
+        "share": args.share,
+        "ssl_keyfile": args.ssl_keyfile or None,
+        "ssl_certfile": args.ssl_certfile or None,
+        "ssl_keyfile_password": args.ssl_keyfile_password or None,
+        "ssl_verify": not args.ssl_no_verify,
+    }
 
 
 def _segments_table(result: dict[str, Any]) -> list[list[Any]]:
@@ -40,6 +107,37 @@ def _segments_table(result: dict[str, Any]) -> list[list[Any]]:
     return rows
 
 
+def _selected_languages(language_1: str | None, language_2: str | None) -> list[str]:
+    selected: list[str] = []
+    for language in (language_1, language_2):
+        value = (language or "").strip()
+        if value and value != AUTO_LANGUAGE and value not in selected:
+            selected.append(value)
+    return selected[:2]
+
+
+def _language_default(language: str | None) -> str:
+    value = (language or "").strip()
+    if not value or value == AUTO_LANGUAGE:
+        return AUTO_LANGUAGE
+    return value if value in SUPPORTED_LANGUAGES else AUTO_LANGUAGE
+
+
+def _realtime_language_config(context: str, language_1: str | None, language_2: str | None) -> tuple[str, str, list[str]]:
+    languages = _selected_languages(language_1, language_2)
+    base_context = (context or "").strip()
+    if len(languages) == 1:
+        return base_context, languages[0], languages
+    if len(languages) == 2:
+        hint = (
+            f"会议场景：音频只包含 {languages[0]} 和 {languages[1]} 两种语言。"
+            f"请只在这两种语言中识别，不要切换到其他语言。"
+        )
+        combined_context = f"{base_context}\n{hint}".strip() if base_context else hint
+        return combined_context, "", languages
+    return base_context, "", []
+
+
 def create_app(
     server: str = "http://127.0.0.1:10012",
     api_url: str = "",
@@ -48,6 +146,8 @@ def create_app(
     unfixed_chunk_num: int = 2,
     unfixed_token_num: int = 5,
     receive_timeout_sec: float = 300.0,
+    realtime_language_1: str = "Chinese",
+    realtime_language_2: str = "English",
 ):
     try:
         import gradio as gr
@@ -72,18 +172,26 @@ def create_app(
         text = result.get("text") or ""
         return text or "转写文本为空。", result, _segments_table(result)
 
-    def start_realtime(context: str):
+    def start_realtime(context: str, language_1: str, language_2: str):
+        realtime_context, forced_language, language_candidates = _realtime_language_config(context, language_1, language_2)
         client = RealtimeWSClient(
             resolved_ws_url,
-            context=context or "",
+            context=realtime_context,
             chunk_size_sec=chunk_size_sec,
             unfixed_chunk_num=unfixed_chunk_num,
             unfixed_token_num=unfixed_token_num,
             receive_timeout_sec=receive_timeout_sec,
+            language=forced_language,
         )
         try:
             started = client.start()
-            return client, "", "", {"status": "started", "started": started, "ws_url": resolved_ws_url}
+            return client, "", "", {
+                "status": "started",
+                "started": started,
+                "ws_url": resolved_ws_url,
+                "forced_language": forced_language,
+                "language_candidates": language_candidates,
+            }
         except RealtimeClientError as exc:
             return None, f"实时连接失败：{exc}", "", {"status": "error", "error": str(exc)}
 
@@ -129,8 +237,21 @@ def create_app(
                 outputs=[offline_text, offline_json, offline_segments],
             )
         with gr.Tab("实时转写"):
+            gr.Markdown(HTTP_MIC_ACCESS_STEPS)
             realtime_state = gr.State(value=None)
             realtime_context = gr.Textbox(label="上下文 Context", value="")
+            language_choices = [AUTO_LANGUAGE, *SUPPORTED_LANGUAGES]
+            with gr.Row():
+                realtime_language_1 = gr.Dropdown(
+                    choices=language_choices,
+                    value=_language_default(realtime_language_1),
+                    label="会议语言 1",
+                )
+                realtime_language_2 = gr.Dropdown(
+                    choices=language_choices,
+                    value=_language_default(realtime_language_2),
+                    label="会议语言 2",
+                )
             with gr.Row():
                 start_button = gr.Button("开始实时转写")
                 stop_button = gr.Button("停止实时转写")
@@ -140,7 +261,7 @@ def create_app(
             status_json = gr.JSON(label="连接状态/指标")
             start_button.click(
                 start_realtime,
-                inputs=[realtime_context],
+                inputs=[realtime_context, realtime_language_1, realtime_language_2],
                 outputs=[realtime_state, partial_text, final_text, status_json],
             )
             mic_audio.stream(
@@ -158,6 +279,9 @@ def create_app(
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if bool(args.ssl_keyfile) != bool(args.ssl_certfile):
+        print("ERROR: --ssl-keyfile 和 --ssl-certfile 必须同时提供。", file=sys.stderr)
+        raise SystemExit(1)
     try:
         demo = create_app(
             server=args.server,
@@ -167,11 +291,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             unfixed_chunk_num=args.unfixed_chunk_num,
             unfixed_token_num=args.unfixed_token_num,
             receive_timeout_sec=args.receive_timeout_sec,
+            realtime_language_1=args.realtime_language_1,
+            realtime_language_2=args.realtime_language_2,
         )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-    demo.launch(server_name=args.host, server_port=args.port, share=args.share)
+    demo.launch(**_launch_kwargs(args))
 
 
 if __name__ == "__main__":

@@ -192,9 +192,9 @@ qwen3-asr-gradio --server http://127.0.0.1:10012 --host 0.0.0.0 --port 7860
 
 验收步骤：
 
-1. 打开 `http://服务器IP:7860`。
+1. 本机调试打开 `http://127.0.0.1:7860` 或 `http://localhost:7860`；远程 IP 使用麦克风时打开 HTTPS 地址，例如 `https://服务器IP:7860`。
 2. 离线 Tab 上传 `sample/sample_0.mp3`，确认文本非空。
-3. 实时 Tab 授权浏览器麦克风，开始讲话，确认 partial 持续刷新。
+3. 实时 Tab 选择最多两种会议语言，授权浏览器麦克风，开始讲话，确认 partial 持续刷新。
 4. 点击停止实时转写，确认 final 文本非空。
 
 
