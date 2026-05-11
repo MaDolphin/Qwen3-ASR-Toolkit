@@ -186,3 +186,7 @@ test/
 !sample/*.mp3
 !sample/*.m4a
 !sample/*.txt
+
+# Runtime logs
+logs/*
+!logs/.gitkeep

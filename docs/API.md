@@ -26,8 +26,12 @@ curl -s http://127.0.0.1:10012/health
   "capabilities": {
     "offline_http": true,
     "native_websocket": true,
-    "forced_aligner": "disabled",
+    "forced_aligner": "remote",
     "max_concurrent_asr_jobs": 1,
+    "requested_max_concurrent_asr_jobs": 1,
+    "asr_scheduler": "priority-single-worker",
+    "realtime_priority": true,
+    "asr_scheduler_queue_size": 0,
     "asr_model_loaded_once": true,
     "offline_num_threads": 1,
     "vad_target_segment_s": 45,
@@ -209,3 +213,10 @@ float32le PCM, mono, 16000 Hz
 | Gradio 实时 Tab | `WS /ws/stream` |
 
 CLI 和 Gradio 都只是客户端，不加载 ASR 模型。
+
+
+## 多人访问说明
+
+多人访问不是新的 API，而是服务端调度策略。HTTP 离线和 WebSocket 实时可以同时接入；ASR 模型推理固定串行执行，WebSocket 优先于离线分段任务。Gradio 也是 API 客户端，不新增 ASR 协议。
+
+客户端可以通过 `/health.capabilities.asr_scheduler_queue_size` 观察当前 ASR 模型队列积压；如果该值持续增长，说明请求量超过当前单 worker 推理能力。

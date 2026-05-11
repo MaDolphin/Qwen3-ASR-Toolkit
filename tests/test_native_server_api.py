@@ -51,13 +51,15 @@ class NativeServerApiTests(unittest.TestCase):
         self.assertTrue(capabilities["native_websocket"])
 
     def test_native_adapter_requires_16k(self):
-        adapter = native_server.NativeQwenASRAdapter(lambda: FakeModel(), DummySemaphore())
+        adapter = native_server.NativeQwenASRAdapter(lambda: FakeModel(), native_server.ASRScheduler())
         with self.assertRaises(ValueError):
             adapter.asr_waveform(np.zeros(1600, dtype=np.float32), sr=8000)
 
     def test_native_adapter_calls_shared_model(self):
         model = FakeModel()
-        adapter = native_server.NativeQwenASRAdapter(lambda: model, DummySemaphore())
+        scheduler = native_server.ASRScheduler()
+        self.addCleanup(scheduler.shutdown)
+        adapter = native_server.NativeQwenASRAdapter(lambda: model, scheduler)
 
         language, text = adapter.asr_waveform(np.zeros(1600, dtype=np.float32), sr=16000, context="ctx")
 

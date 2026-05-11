@@ -196,3 +196,41 @@ qwen3-asr-gradio --server http://127.0.0.1:10012 --host 0.0.0.0 --port 7860
 2. 离线 Tab 上传 `sample/sample_0.mp3`，确认文本非空。
 3. 实时 Tab 授权浏览器麦克风，开始讲话，确认 partial 持续刷新。
 4. 点击停止实时转写，确认 final 文本非空。
+
+
+## .env / GPU / Gradio 验证
+
+```bash
+cat .env
+cat runtime/native_deploy/gpu_visible_devices.txt
+curl -fsS http://127.0.0.1:${QWEN3_ASR_PORT:-10012}/health
+curl -fsS http://127.0.0.1:${QWEN3_GRADIO_PORT:-7860} > /tmp/qwen3_gradio.html
+```
+
+检查 `/health` 中：
+
+```text
+capabilities.max_concurrent_asr_jobs == 1
+capabilities.asr_scheduler == priority-single-worker
+capabilities.realtime_priority == true
+```
+
+## 并发稳定性建议
+
+当前采用单模型单 worker 串行推理，并通过优先级队列让 WebSocket 实时任务优先于离线分段任务。若实时延迟仍明显堆积，请将 `.env` 中 `QWEN3_ASR_OFFLINE_NUM_THREADS` 调整为 `1` 后重测。
+
+建议增加一个并发观察场景：先提交一条离线长音频，再启动 30s WebSocket 测试；预期 WebSocket 连接可以建立并持续收到 partial，离线任务会被延后但不应导致服务崩溃。
+
+## 测试后停止服务
+
+每次真实功能测试完成后执行，或使用 `STOP_AFTER_TEST=1` 自动停止：
+
+```bash
+bash scripts/stop_native_asr.sh
+```
+
+确保释放 GPU 显存，避免影响后续部署和测试。
+
+```bash
+STOP_AFTER_TEST=1 bash scripts/test_native_asr_functional.sh
+```

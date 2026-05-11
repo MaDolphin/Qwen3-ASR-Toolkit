@@ -39,12 +39,62 @@ CLI / HTTP / WebSocket
 - 推荐 Python：`3.11` / `3.12` / `3.13`。
 - 当前验证环境：`conda activate qwen-asr`，Python `3.13.5`，NVIDIA L20。
 
-## 一键部署
+## .env 配置
 
-一键部署会自动检查依赖、下载模型并启动两个服务：
+部署配置统一来自 `.env`。首次运行 `scripts/deploy_native_asr.sh` 时，如果 `.env` 不存在，脚本会自动从 `.env.example` 复制生成。
+
+常用配置：
 
 ```bash
-bash scripts/deploy_native_asr.sh --conda-env qwen-asr
+QWEN3_CUDA_VISIBLE_DEVICES=0
+QWEN3_ASR_PORT=10012
+QWEN3_ALIGNER_PORT=10013
+QWEN3_GRADIO_PORT=7860
+QWEN3_ASR_MAX_CONCURRENT_JOBS=1
+QWEN3_ASR_OFFLINE_NUM_THREADS=2
+```
+
+多卡机器默认 ASR 和 ForcedAligner 使用同一张卡：
+
+```bash
+QWEN3_CUDA_VISIBLE_DEVICES=1
+```
+
+高级分卡配置：
+
+```bash
+QWEN3_ASR_CUDA_VISIBLE_DEVICES=0
+QWEN3_ALIGNER_CUDA_VISIBLE_DEVICES=1
+```
+
+## 多人访问与并发
+
+服务支持多人同时接入 HTTP 离线转写和 WebSocket 实时转写。当前 ASR 模型推理采用单 worker 串行执行，超过后会在服务端排队，不会因为超过并发槽就直接拒绝连接。
+
+实际可承载人数取决于任务类型、音频长度、GPU 显存、KV cache 和实时延迟要求：
+
+- 短音频离线：适合多人同时提交，超过并发槽后排队。
+- 长音频离线：会被切成多个 segment，可能占用多个并发槽。
+- 实时 WebSocket：每个连接持续产生 chunk 推理请求，多路实时会共享并发槽。
+
+当前采用单模型单 worker 串行推理，WebSocket 实时任务优先于离线分段任务。该模式避免同一个 vLLM LLM 实例并行 generate 触发 EngineCore 异常；如离线长音频影响实时延迟，请将 `QWEN3_ASR_OFFLINE_NUM_THREADS` 降到 `1`。
+
+调度策略：
+
+```text
+HTTP 离线分段 -> ASR priority queue(priority=10)
+WebSocket chunk/final -> ASR priority queue(priority=0)
+                    -> single ASR worker -> shared Qwen3-ASR-1.7B
+```
+
+`QWEN3_ASR_MAX_CONCURRENT_JOBS` 现在保留为兼容参数，实际模型推理固定串行；`/health.capabilities.requested_max_concurrent_asr_jobs` 会记录用户请求值，`max_concurrent_asr_jobs` 固定为 `1`。
+
+## 一键部署
+
+一键部署会自动检查依赖、下载模型并启动三个进程：ForcedAligner、ASR Native Server 和 Gradio 客户端服务：
+
+```bash
+bash scripts/deploy_native_asr.sh
 ```
 
 使用当前已激活环境部署：
@@ -63,6 +113,16 @@ WS local:       ws://127.0.0.1:10012/ws/stream
 WS remote:      ws://服务器IP:10012/ws/stream
 Aligner local:  http://127.0.0.1:10013
 Aligner remote: http://服务器IP:10013
+Gradio local:  http://127.0.0.1:7860
+Gradio remote: http://服务器IP:7860
+```
+
+Health 中应看到：
+
+```text
+capabilities.asr_scheduler=priority-single-worker
+capabilities.realtime_priority=true
+capabilities.max_concurrent_asr_jobs=1
 ```
 
 默认低显存参数：
@@ -84,6 +144,18 @@ ALIGNER_CPU_OFFLOAD_GB=0
 ```bash
 bash scripts/stop_native_asr.sh
 ```
+
+## 日志目录
+
+一键部署会创建 `logs/`，用于排查线上问题：
+
+```text
+logs/asr_server.log      # ASR Native Server 访问和运行日志
+logs/gradio_server.log   # Gradio 页面访问和运行日志
+logs/aligner_server.log  # ForcedAligner 运行日志
+```
+
+测试完成后请执行 `bash scripts/stop_native_asr.sh` 停止服务，避免占用 GPU；也可以使用 `STOP_AFTER_TEST=1 bash scripts/test_native_asr_functional.sh` 让测试脚本结束时自动停止服务。
 
 ## 手动安装
 
@@ -122,6 +194,8 @@ modelscope download \
 如果 ForcedAligner 已经在 `127.0.0.1:10013` 启动，可以单独启动 ASR：
 
 ```bash
+export CUDA_VISIBLE_DEVICES=0
+
 qwen3-asr-native-server \
   --host 0.0.0.0 \
   --port 10012 \
@@ -131,7 +205,7 @@ qwen3-asr-native-server \
   --max-model-len 65536 \
   --max-new-tokens 128 \
   --enable-offline-api \
-  --offline-num-threads 1 \
+  --offline-num-threads 2 \
   --max-concurrent-asr-jobs 1 \
   --aligner-mode remote \
   --aligner-base-url http://127.0.0.1:10013 \
@@ -189,7 +263,7 @@ qwen3-asr-cli health --server http://服务器IP:10012
 
 ## Gradio Web UI
 
-Gradio 只作为客户端访问已部署的 Native ASR 服务，不加载 ASR 模型。
+Gradio 只作为客户端访问已部署的 Native ASR 服务，不加载 ASR 模型。默认监听 `0.0.0.0:7860`，方便远程浏览器访问。
 
 安装客户端依赖：
 

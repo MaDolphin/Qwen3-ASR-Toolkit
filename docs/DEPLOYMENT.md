@@ -63,6 +63,21 @@ qwen3-asr-native-server \
 bash scripts/run_native_server.sh
 ```
 
+
+## ASR 调度与并发配置
+
+统一服务使用单模型单 worker 优先级队列：
+
+- WebSocket 实时任务优先级高于离线分段任务。
+- `QWEN3_ASR_MAX_CONCURRENT_JOBS` 保留为兼容参数，实际模型执行固定为 `1`。
+- `QWEN3_ASR_OFFLINE_NUM_THREADS` 控制离线长音频分段提交并行度；实时延迟敏感时建议设置为 `1`。
+
+部署后验证：
+
+```bash
+curl -s http://127.0.0.1:${QWEN3_ASR_PORT:-10012}/health | jq '.capabilities | {asr_scheduler,realtime_priority,max_concurrent_asr_jobs,requested_max_concurrent_asr_jobs,asr_scheduler_queue_size}'
+```
+
 ## 5. 健康检查
 
 ```bash
@@ -186,3 +201,35 @@ http://服务器IP:7860
 ```
 
 远程访问时至少需要开放 ASR 服务端口 `10012` 和 Gradio 端口 `7860`。
+
+
+## .env 驱动部署
+
+生产部署统一从 `.env` 读取配置。首次执行部署脚本时，如果 `.env` 不存在，会自动从 `.env.example` 创建。
+
+```bash
+cp .env.example .env
+vim .env
+bash scripts/deploy_native_asr.sh
+```
+
+自定义 env 文件：
+
+```bash
+bash scripts/deploy_native_asr.sh --env-file .env.prod
+```
+
+多 GPU 指定：
+
+```bash
+QWEN3_CUDA_VISIBLE_DEVICES=0
+# 或高级分卡
+QWEN3_ASR_CUDA_VISIBLE_DEVICES=0
+QWEN3_ALIGNER_CUDA_VISIBLE_DEVICES=1
+```
+
+Gradio 默认随一键部署启动，监听 `.env` 中的 `QWEN3_GRADIO_HOST:QWEN3_GRADIO_PORT`。
+
+## 日志目录
+
+一键部署会将服务日志写入 `logs/`：`logs/asr_server.log`、`logs/gradio_server.log`、`logs/aligner_server.log`。`runtime/native_deploy/` 中保留 PID、health 和 GPU 快照，并通过符号链接指向这些日志。

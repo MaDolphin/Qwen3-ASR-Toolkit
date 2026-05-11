@@ -16,8 +16,10 @@ Usage:
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import os
+import queue
 import sys
 import tempfile
 import threading
@@ -25,8 +27,8 @@ import time
 import traceback
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -76,8 +78,9 @@ _aligner_api_key: str = "EMPTY"
 _aligner_timeout_s: int = 120
 _aligner_timestamp_segment_time_ms: int = 80
 _max_concurrent_asr_jobs: int = 1
+_requested_max_concurrent_asr_jobs: int = 1
 _offline_transcriber: Optional[OfflineTranscriber] = None
-_asr_thread_semaphore: Optional[threading.Semaphore] = None
+_asr_scheduler: Optional["ASRScheduler"] = None
 
 
 @dataclass
@@ -87,6 +90,81 @@ class AudioQueueItem:
     received_samples: int = 0
     total_samples: int = 0
     received_at: float = 0.0
+
+
+@dataclass(order=True)
+class ASRJob:
+    priority: int
+    sequence: int
+    fn: Callable[[], Any] = field(compare=False)
+    future: concurrent.futures.Future = field(compare=False)
+    label: str = field(default="", compare=False)
+    submitted_at: float = field(default_factory=time.perf_counter, compare=False)
+
+
+class ASRScheduler:
+    """Single-worker ASR scheduler with realtime-priority queue."""
+
+    PRIORITY_REALTIME = 0
+    PRIORITY_OFFLINE = 10
+
+    def __init__(self):
+        self._queue: queue.PriorityQueue[ASRJob] = queue.PriorityQueue()
+        self._sequence = 0
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._worker = threading.Thread(target=self._run, name="asr-priority-worker", daemon=True)
+        self._worker.start()
+
+    def submit(self, fn: Callable[[], Any], *, priority: int, label: str = ""):
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        with self._lock:
+            self._sequence += 1
+            sequence = self._sequence
+        self._queue.put(ASRJob(priority=priority, sequence=sequence, fn=fn, future=future, label=label))
+        return future
+
+    def run_sync(self, fn: Callable[[], Any], *, priority: int, label: str = ""):
+        return self.submit(fn, priority=priority, label=label).result()
+
+    async def run_async(self, fn: Callable[[], Any], *, priority: int, label: str = "", timeout: float = 0.0):
+        future = self.submit(fn, priority=priority, label=label)
+        wrapped = asyncio.wrap_future(future)
+        if timeout and timeout > 0:
+            return await asyncio.wait_for(wrapped, timeout=timeout)
+        return await wrapped
+
+    def qsize(self) -> int:
+        return self._queue.qsize()
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        self._queue.put(ASRJob(priority=999999, sequence=999999999, fn=lambda: None, future=future, label="shutdown"))
+        self._worker.join(timeout=5)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            job = self._queue.get()
+            if job.label == "shutdown":
+                return
+            if job.future.cancelled():
+                continue
+            try:
+                wait_sec = time.perf_counter() - job.submitted_at
+                if wait_sec > 0.1:
+                    print(f"[ASR Scheduler] start label={job.label} priority={job.priority} wait={wait_sec:.3f}s queued={self.qsize()}")
+                result = job.fn()
+            except Exception as exc:
+                job.future.set_exception(exc)
+            else:
+                job.future.set_result(result)
+
+
+def _scheduler_required() -> ASRScheduler:
+    if _asr_scheduler is None:
+        raise RuntimeError("ASR scheduler is not initialized.")
+    return _asr_scheduler
 
 
 
@@ -130,20 +208,26 @@ def _format_size_bytes(value: Optional[int]) -> Optional[str]:
 class NativeQwenASRAdapter:
     """OfflineTranscriber-compatible adapter backed by the shared native ASR model."""
 
-    def __init__(self, get_model, semaphore: threading.Semaphore):
+    def __init__(self, get_model, scheduler: ASRScheduler):
         self.get_model = get_model
-        self.semaphore = semaphore
+        self.scheduler = scheduler
 
     def asr_waveform(self, wav: np.ndarray, sr: int = 16000, context: str = ""):
         if sr != 16000:
             raise ValueError("NativeQwenASRAdapter expects 16 kHz audio.")
         pcm = np.asarray(wav, dtype=np.float32).reshape(-1)
-        with self.semaphore:
-            outputs = self.get_model().transcribe(
+        def call():
+            return self.get_model().transcribe(
                 audio=[(pcm, sr)],
                 context=[context or ""],
                 return_time_stamps=False,
             )
+
+        outputs = self.scheduler.run_sync(
+            call,
+            priority=ASRScheduler.PRIORITY_OFFLINE,
+            label="offline-transcribe",
+        )
         result = outputs[0]
         return getattr(result, "language", "") or "", getattr(result, "text", "") or ""
 
@@ -170,9 +254,8 @@ def _build_offline_transcriber():
     global _offline_transcriber
     if _offline_transcriber is not None:
         return _offline_transcriber
-    if _asr_thread_semaphore is None:
-        raise RuntimeError("ASR semaphore is not initialized.")
-    adapter = NativeQwenASRAdapter(_load_model, _asr_thread_semaphore)
+    scheduler = _scheduler_required()
+    adapter = NativeQwenASRAdapter(_load_model, scheduler)
     aligner_kwargs = _forced_aligner_config()
     _offline_transcriber = OfflineTranscriber(
         asr_client=adapter,
@@ -219,6 +302,10 @@ def _capabilities() -> dict[str, Any]:
         "native_websocket": True,
         "forced_aligner": _aligner_mode,
         "max_concurrent_asr_jobs": _max_concurrent_asr_jobs,
+        "requested_max_concurrent_asr_jobs": _requested_max_concurrent_asr_jobs,
+        "asr_scheduler": "priority-single-worker",
+        "realtime_priority": True,
+        "asr_scheduler_queue_size": _asr_scheduler.qsize() if _asr_scheduler is not None else None,
         "asr_model_loaded_once": _qwen_asr_model is not None,
         "offline_num_threads": _offline_num_threads,
         "vad_target_segment_s": _vad_target_segment_s,
@@ -256,11 +343,11 @@ def _probe_model() -> dict:
             _qwen_asr_model.streaming_transcribe(dummy, state)
             _qwen_asr_model.finish_streaming_transcribe(state)
 
-        if _asr_thread_semaphore is None:
-            call()
-        else:
-            with _asr_thread_semaphore:
-                call()
+        _scheduler_required().run_sync(
+            call,
+            priority=ASRScheduler.PRIORITY_REALTIME,
+            label="health-probe",
+        )
         return {
             "status": "ok",
             "model": _model_path,
@@ -290,6 +377,8 @@ async def lifespan(app: FastAPI):
         print("[Warning] /health will report unavailable until model is loaded.")
     yield
     # Shutdown
+    if _asr_scheduler is not None:
+        _asr_scheduler.shutdown()
     print("[Server] Shutting down.")
 
 
@@ -393,15 +482,14 @@ async def websocket_stream(websocket: WebSocket):
 
     async def decode_call(func, *args):
         def _locked_call():
-            if _asr_thread_semaphore is None:
-                return func(*args)
-            with _asr_thread_semaphore:
-                return func(*args)
+            return func(*args)
 
-        task = asyncio.to_thread(_locked_call)
-        if _decode_timeout_sec > 0:
-            return await asyncio.wait_for(task, timeout=_decode_timeout_sec)
-        return await task
+        return await _scheduler_required().run_async(
+            _locked_call,
+            priority=ASRScheduler.PRIORITY_REALTIME,
+            label=f"ws-{connection_id}",
+            timeout=_decode_timeout_sec,
+        )
 
     async def enqueue_error(send_queue: asyncio.Queue, stop_event: asyncio.Event, message: str):
         stop_event.set()
@@ -650,7 +738,11 @@ async def websocket_stream(websocket: WebSocket):
     finally:
         if state is not None and not getattr(state, "_finished", False):
             try:
-                asr.finish_streaming_transcribe(state)
+                _scheduler_required().run_sync(
+                    lambda: asr.finish_streaming_transcribe(state),
+                    priority=ASRScheduler.PRIORITY_REALTIME,
+                    label=f"ws-{connection_id}-cleanup",
+                )
             except Exception:
                 pass
         print(f"[WS {connection_id}] disconnected")
@@ -809,7 +901,7 @@ def parse_args():
         "--max-concurrent-asr-jobs",
         type=int,
         default=1,
-        help="Shared native ASR model concurrency across offline HTTP and WebSocket decode calls.",
+        help="Compatibility option. Native model execution is serialized through a realtime-priority scheduler.",
     )
     return parser.parse_args()
 
@@ -822,7 +914,7 @@ def main():
     global _enable_offline_api, _offline_num_threads, _vad_target_segment_s, _vad_max_segment_s
     global _aligner_mode, _aligner_model_path, _aligner_base_url, _aligner_api_key
     global _aligner_timeout_s, _aligner_timestamp_segment_time_ms
-    global _max_concurrent_asr_jobs, _asr_thread_semaphore, _offline_transcriber
+    global _max_concurrent_asr_jobs, _requested_max_concurrent_asr_jobs, _asr_scheduler, _offline_transcriber
 
     args = parse_args()
     _model_path = args.model_path or os.environ.get("QWEN3_ASR_MODEL_PATH")
@@ -849,8 +941,11 @@ def main():
     _aligner_api_key = args.aligner_api_key
     _aligner_timeout_s = int(args.aligner_timeout_s)
     _aligner_timestamp_segment_time_ms = int(args.aligner_timestamp_segment_time_ms)
-    _max_concurrent_asr_jobs = max(1, args.max_concurrent_asr_jobs)
-    _asr_thread_semaphore = threading.Semaphore(_max_concurrent_asr_jobs)
+    _requested_max_concurrent_asr_jobs = max(1, args.max_concurrent_asr_jobs)
+    _max_concurrent_asr_jobs = 1
+    if _requested_max_concurrent_asr_jobs != 1:
+        print("[ASR Scheduler] --max-concurrent-asr-jobs is kept for compatibility; native model execution is serialized with realtime priority.")
+    _asr_scheduler = ASRScheduler()
     _offline_transcriber = None
 
     import uvicorn

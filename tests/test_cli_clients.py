@@ -109,12 +109,11 @@ class CliClientTests(unittest.TestCase):
         import subprocess
 
         result = subprocess.run(["bash", "scripts/deploy_native_asr.sh", "--help"], text=True, capture_output=True, check=True)
-        self.assertIn("--conda-env", result.stdout)
+        self.assertIn("--env-file", result.stdout)
         self.assertIn("--no-conda-activate", result.stdout)
-        self.assertIn("--asr-host", result.stdout)
-        self.assertIn("--aligner-host", result.stdout)
-        self.assertIn("0.30", result.stdout)
-        self.assertIn("0.10", result.stdout)
+        self.assertIn(".env", result.stdout)
+        self.assertIn("GPU", result.stdout)
+        self.assertIn("Gradio", result.stdout)
 
     def test_size_parser(self):
         from deploy.vllm_streaming_server_native import _parse_size_bytes

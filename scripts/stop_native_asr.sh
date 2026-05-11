@@ -1,12 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  echo "Usage: bash scripts/stop_native_asr.sh"
-  exit 0
-fi
+usage() {
+  cat <<'USAGE'
+Usage:
+  bash scripts/stop_native_asr.sh [--env-file PATH]
+USAGE
+}
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+cd "$PROJECT_DIR"
+ENV_FILE=".env"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --env-file)
+      ENV_FILE="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+PROJECT_DIR="${PROJECT_DIR:-$PWD}"
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT_DIR/runtime/native_deploy}"
 
 stop_pid_file() {
@@ -28,6 +58,7 @@ stop_pid_file() {
   fi
 }
 
+stop_pid_file "$RUNTIME_DIR/gradio_server.pid" "Gradio server"
 stop_pid_file "$RUNTIME_DIR/asr_server.pid" "ASR server"
 stop_pid_file "$RUNTIME_DIR/aligner_server.pid" "ForcedAligner server"
 

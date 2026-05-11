@@ -91,3 +91,32 @@ deploy/         -> 服务端部署入口、ForcedAligner wrapper、systemd
 ```
 
 `client/` 和 `examples/` 都不会加载 `Qwen3-ASR-1.7B`，只访问已经部署好的 Native ASR Server。
+
+
+## 并发模型
+
+FastAPI 可以同时接受多个 HTTP 和 WebSocket 连接，但所有 ASR 模型推理会进入同一个优先级队列，由单个 ASR worker 串行执行。这样可以避免同一个 vLLM `LLM` 实例并行 `generate` 时触发 EngineCore 异常。
+
+```text
+HTTP offline segment
+  -> NativeQwenASRAdapter
+  -> ASRScheduler(priority=10, label=offline-transcribe)
+
+WebSocket chunk/final
+  -> websocket processor_task
+  -> ASRScheduler(priority=0, label=ws-*)
+
+ASRScheduler
+  -> single worker thread
+  -> shared Qwen3ASRModel.LLM
+```
+
+关键字段：
+
+- `max_concurrent_asr_jobs`：实际模型执行并发，固定为 `1`。
+- `requested_max_concurrent_asr_jobs`：启动参数中请求的值，仅用于观测和兼容。
+- `asr_scheduler=priority-single-worker`：表示启用单 worker 优先级调度。
+- `realtime_priority=true`：表示 WebSocket 实时任务优先于离线分段任务。
+- `asr_scheduler_queue_size`：当前等待进入模型的任务数。
+
+`QWEN3_ASR_OFFLINE_NUM_THREADS` 只影响离线长音频分段准备和提交任务的并行度，不代表模型推理并行。若实时延迟明显增大或 partial 堆积，优先将它降到 `1`。Gradio 部署在同一台服务器上，但只作为客户端，不使用 GPU。

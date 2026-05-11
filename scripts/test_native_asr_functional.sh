@@ -22,21 +22,40 @@ fi
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$PROJECT_DIR"
 
+if [[ -f ".env" ]]; then
+  set -a
+  source .env
+  set +a
+fi
+
 if [[ -n "${CONDA_ENV:-}" ]]; then
   activate_conda_env
 else
   echo "Using current Python environment: $(command -v python)"
 fi
 
-ASR_BASE_URL="${ASR_BASE_URL:-http://127.0.0.1:10012}"
-ALIGNER_BASE_URL="${ALIGNER_BASE_URL:-http://127.0.0.1:10013}"
+ASR_BASE_URL="${ASR_BASE_URL:-http://127.0.0.1:${QWEN3_ASR_PORT:-10012}}"
+ALIGNER_BASE_URL="${ALIGNER_BASE_URL:-http://127.0.0.1:${QWEN3_ALIGNER_PORT:-10013}}"
+GRADIO_BASE_URL="${GRADIO_BASE_URL:-http://127.0.0.1:${QWEN3_GRADIO_PORT:-7860}}"
 OUT_DIR="${OUT_DIR:-$PROJECT_DIR/runtime/native_deploy_validation}"
+STOP_AFTER_TEST="${STOP_AFTER_TEST:-0}"
+
+cleanup_after_test() {
+  if [[ "$STOP_AFTER_TEST" == "1" ]]; then
+    bash scripts/stop_native_asr.sh || true
+  fi
+}
+trap cleanup_after_test EXIT
+
 mkdir -p "$OUT_DIR"
 
 nvidia-smi --query-gpu=name,memory.total,memory.used,memory.free --format=csv,noheader,nounits > "$OUT_DIR/gpu_before_tests.txt" || true
 curl -fsS "$ASR_BASE_URL/health" > "$OUT_DIR/health_asr.json"
 curl -fsS "$ALIGNER_BASE_URL/health" > "$OUT_DIR/health_aligner.raw"
 printf '{"status":"ok","endpoint":"%s/health"}\n' "$ALIGNER_BASE_URL" > "$OUT_DIR/health_aligner.json"
+if [[ "${QWEN3_GRADIO_ENABLE:-1}" == "1" ]]; then
+  curl -fsS "$GRADIO_BASE_URL" > "$OUT_DIR/health_gradio.html"
+fi
 
 qwen3-asr-offline-cli \
   --input-file sample/sample_0.mp3 \
@@ -91,7 +110,7 @@ import json
 from pathlib import Path
 out = Path('runtime/native_deploy_validation')
 lines = ['# Native ASR 功能测试报告', '']
-for name in ['health_asr.json', 'health_aligner.json', 'offline_cli_sample_0.json', 'offline_cli_sample_0_aligned.json', 'offline_cli_sample_2.json', 'websocket_sample_2_120s.json', 'ws_cli_sample_2_120s.json']:
+for name in ['health_asr.json', 'health_aligner.json', 'health_gradio.html', 'offline_cli_sample_0.json', 'offline_cli_sample_0_aligned.json', 'offline_cli_sample_2.json', 'websocket_sample_2_120s.json', 'ws_cli_sample_2_120s.json']:
     path = out / name
     if not path.exists():
         lines.append(f'- `{name}`: 缺失')
@@ -99,6 +118,9 @@ for name in ['health_asr.json', 'health_aligner.json', 'offline_cli_sample_0.jso
     raw = path.read_text(encoding='utf-8').strip()
     if not raw:
         lines.append(f'- `{name}`: ok')
+        continue
+    if name.endswith('.html'):
+        lines.append(f'- `{name}`: ok, bytes={len(raw.encode("utf-8"))}')
         continue
     data = json.loads(raw)
     if name.startswith('offline'):

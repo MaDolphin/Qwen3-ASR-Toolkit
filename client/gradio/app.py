@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server", default="http://127.0.0.1:10012", help="Native ASR 服务地址。")
     parser.add_argument("--api-url", default="", help="离线 HTTP API 地址；优先级高于 --server。")
     parser.add_argument("--ws-url", default="", help="WebSocket 地址；优先级高于 --server。")
-    parser.add_argument("--host", default="127.0.0.1", help="Gradio 监听地址。")
+    parser.add_argument("--host", default="0.0.0.0", help="Gradio 监听地址。")
     parser.add_argument("--port", type=int, default=7860, help="Gradio 监听端口。")
     parser.add_argument("--share", action="store_true", help="启用 Gradio share。")
     parser.add_argument("--chunk-ms", type=int, default=500, help="实时音频 chunk 毫秒数。")
