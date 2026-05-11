@@ -7,7 +7,7 @@ from typing import Any, Sequence
 
 import requests
 
-from qwen3_asr_toolkit.cli_utils import build_offline_api_url
+from client.cli.url_utils import build_offline_api_url
 
 DEFAULT_API_URL = "http://127.0.0.1:10012/api/v1/offline/transcribe"
 

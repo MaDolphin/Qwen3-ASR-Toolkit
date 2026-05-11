@@ -196,3 +196,16 @@ float32le PCM, mono, 16000 Hz
 | `qwen3-asr-offline-cli --server http://服务器IP:10012` | `POST /api/v1/offline/transcribe` |
 | `qwen3-asr-stream-cli --server http://服务器IP:10012` | `WS /ws/stream` |
 | `qwen3-asr-cli health --server http://服务器IP:10012` | `GET /health` |
+
+
+## 客户端对应关系
+
+| 客户端 | 底层接口 |
+| --- | --- |
+| `qwen3-asr-offline-cli` | `POST /api/v1/offline/transcribe` |
+| `qwen3-asr-stream-cli` | `WS /ws/stream` |
+| `qwen3-asr-cli health` | `GET /health` |
+| Gradio 离线 Tab | `POST /api/v1/offline/transcribe` |
+| Gradio 实时 Tab | `WS /ws/stream` |
+
+CLI 和 Gradio 都只是客户端，不加载 ASR 模型。

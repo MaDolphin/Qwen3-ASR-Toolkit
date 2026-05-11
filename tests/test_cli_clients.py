@@ -4,18 +4,18 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from qwen3_asr_toolkit import cli, offline_cli, realtime_cli
-from qwen3_asr_toolkit.cli_utils import build_offline_api_url, build_stream_ws_url, normalize_server_url
+from client.cli import main as cli, offline, stream
+from client.cli.url_utils import build_offline_api_url, build_stream_ws_url, normalize_server_url
 
 
 class CliClientTests(unittest.TestCase):
     def test_offline_cli_default_url(self):
-        args = offline_cli.parse_args(["--input-file", "sample/sample_0.mp3"])
+        args = offline.parse_args(["--input-file", "sample/sample_0.mp3"])
         self.assertEqual(args.api_url, "http://127.0.0.1:10012/api/v1/offline/transcribe")
         self.assertEqual(args.timeout_sec, 1800.0)
 
     def test_realtime_cli_default_url(self):
-        args = realtime_cli.parse_args(["--input-file", "sample/sample_2.m4a"])
+        args = stream.parse_args(["--input-file", "sample/sample_2.m4a"])
         self.assertEqual(args.ws_url, "ws://127.0.0.1:10012/ws/stream")
         self.assertEqual(args.chunk_ms, 500)
         self.assertEqual(args.max_inflight_chunks, 4)
@@ -31,11 +31,11 @@ class CliClientTests(unittest.TestCase):
         self.assertEqual(build_stream_ws_url("https://asr.example.com"), "wss://asr.example.com/ws/stream")
 
     def test_offline_cli_server_url(self):
-        args = offline_cli.parse_args(["--server", "http://1.2.3.4:10012", "--input-file", "sample/sample_0.mp3"])
+        args = offline.parse_args(["--server", "http://1.2.3.4:10012", "--input-file", "sample/sample_0.mp3"])
         self.assertEqual(args.api_url, "http://1.2.3.4:10012/api/v1/offline/transcribe")
 
     def test_offline_cli_api_url_overrides_server(self):
-        args = offline_cli.parse_args([
+        args = offline.parse_args([
             "--server",
             "http://1.2.3.4:10012",
             "--api-url",
@@ -46,11 +46,11 @@ class CliClientTests(unittest.TestCase):
         self.assertEqual(args.api_url, "http://9.9.9.9:10012/custom")
 
     def test_realtime_cli_server_url(self):
-        args = realtime_cli.parse_args(["--server", "http://1.2.3.4:10012", "--input-file", "sample/sample_2.m4a"])
+        args = stream.parse_args(["--server", "http://1.2.3.4:10012", "--input-file", "sample/sample_2.m4a"])
         self.assertEqual(args.ws_url, "ws://1.2.3.4:10012/ws/stream")
 
     def test_realtime_cli_ws_url_overrides_server(self):
-        args = realtime_cli.parse_args([
+        args = stream.parse_args([
             "--server",
             "http://1.2.3.4:10012",
             "--ws-url",
@@ -67,7 +67,7 @@ class CliClientTests(unittest.TestCase):
             unfixed_chunk_num=2,
             unfixed_token_num=5,
         )
-        payload = realtime_cli.build_start_payload(args)
+        payload = stream.build_start_payload(args)
         self.assertEqual(payload["event"], "start")
         self.assertTrue(payload["stream"])
         self.assertEqual(payload["context"], "ctx")
@@ -83,9 +83,9 @@ class CliClientTests(unittest.TestCase):
             "forced_aligner": {"requested": False, "available": False, "items": []},
         }
         response.raise_for_status.return_value = None
-        args = offline_cli.parse_args(["--input-file", "sample/sample_0.mp3", "--quiet"])
-        with patch("qwen3_asr_toolkit.offline_cli.requests.post", return_value=response) as post:
-            result = offline_cli.run(args)
+        args = offline.parse_args(["--input-file", "sample/sample_0.mp3", "--quiet"])
+        with patch("client.cli.offline.requests.post", return_value=response) as post:
+            result = offline.run(args)
         self.assertEqual(result["text"], "你好")
         self.assertEqual(post.call_args.kwargs["data"]["use_forced_aligner"], "false")
 
@@ -93,7 +93,7 @@ class CliClientTests(unittest.TestCase):
         response = Mock()
         response.json.return_value = {"status": "ok"}
         response.raise_for_status.return_value = None
-        with patch("qwen3_asr_toolkit.cli.requests.get", return_value=response) as get:
+        with patch("client.cli.main.requests.get", return_value=response) as get:
             cli.run_health(argparse.Namespace(server="", base_url="http://127.0.0.1:10012", timeout_sec=3))
         self.assertEqual(get.call_args.args[0], "http://127.0.0.1:10012/health")
 
@@ -101,7 +101,7 @@ class CliClientTests(unittest.TestCase):
         response = Mock()
         response.json.return_value = {"status": "ok"}
         response.raise_for_status.return_value = None
-        with patch("qwen3_asr_toolkit.cli.requests.get", return_value=response) as get:
+        with patch("client.cli.main.requests.get", return_value=response) as get:
             cli.run_health(argparse.Namespace(server="http://1.2.3.4:10012", base_url="", timeout_sec=3))
         self.assertEqual(get.call_args.args[0], "http://1.2.3.4:10012/health")
 

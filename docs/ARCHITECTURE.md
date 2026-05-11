@@ -79,3 +79,15 @@ ForcedAligner kv_cache_memory_bytes=2G
 - 在线方案是服务层 streaming/windowed 策略，不声称 KV-cache 级 true incremental streaming。
 - 无 token-level streaming。
 - 默认长音频在线使用 windowed session。
+
+
+## 客户端分层
+
+```text
+client/cli      -> 命令行客户端，调用 HTTP / WebSocket API
+client/gradio   -> Web UI 客户端，支持离线上传和浏览器麦克风实时转写
+examples/       -> Python 调用示例和验证脚本
+deploy/         -> 服务端部署入口、ForcedAligner wrapper、systemd
+```
+
+`client/` 和 `examples/` 都不会加载 `Qwen3-ASR-1.7B`，只访问已经部署好的 Native ASR Server。

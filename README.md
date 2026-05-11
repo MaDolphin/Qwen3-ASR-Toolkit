@@ -187,6 +187,69 @@ qwen3-asr-cli stream --input-file sample/sample_2.m4a --duration-sec 120
 qwen3-asr-cli health --server http://服务器IP:10012
 ```
 
+## Gradio Web UI
+
+Gradio 只作为客户端访问已部署的 Native ASR 服务，不加载 ASR 模型。
+
+安装客户端依赖：
+
+```bash
+pip install -r requirements-client.txt
+# 或者
+pip install -e .[client]
+```
+
+启动 Web UI：
+
+```bash
+qwen3-asr-gradio \
+  --server http://服务器IP:10012 \
+  --host 0.0.0.0 \
+  --port 7860
+```
+
+功能：
+
+- 离线 Tab：上传音频文件，调用 `POST /api/v1/offline/transcribe`。
+- 实时 Tab：浏览器授权麦克风，Gradio 后端连接 `WS /ws/stream`，持续展示 partial，停止后展示 final。
+
+## Python examples
+
+```bash
+python examples/offline_http_example.py \
+  --server http://127.0.0.1:10012 \
+  --input sample/sample_0.mp3 \
+  --output-json runtime/examples/offline_result.json
+
+python examples/realtime_ws_example.py \
+  --server http://127.0.0.1:10012 \
+  --input sample/sample_2.m4a \
+  --duration-sec 30 \
+  --realtime \
+  --output-json runtime/examples/ws_result.json
+
+python examples/windowed_long_audio_example.py \
+  --uri ws://127.0.0.1:10012/ws/stream \
+  --input sample/sample_2.m4a \
+  --output runtime/examples/windowed_result.json \
+  --case-dir runtime/examples/windowed_cases \
+  --window-sec 120 \
+  --chunk-ms 500
+```
+
+## deploy 目录说明
+
+`deploy/` 只保留服务端部署相关文件：
+
+| 文件 | 用途 |
+| --- | --- |
+| `deploy/vllm_streaming_server_native.py` | 统一 Native ASR server，提供 health、离线 HTTP 和在线 WebSocket。 |
+| `deploy/forced_aligner_server.py` | ForcedAligner vLLM pooling server 启动封装。 |
+| `deploy/streaming_utils.py` | Native server 使用的流式转写辅助函数。 |
+| `deploy/systemd/` | 生产 systemd 服务文件。 |
+
+验证脚本已移动到 `examples/validation/`。
+
 ## HTTP API 使用方式
 
 本机访问使用 `127.0.0.1`，远程访问将地址替换为 `服务器IP:10012`：
@@ -214,7 +277,7 @@ WebSocket 地址：
 单个 WebSocket session 推荐不超过 `120s`。更长音频使用 windowed 方式：
 
 ```bash
-python deploy/test_native_streaming_windowed_harness.py \
+python examples/validation/test_native_streaming_windowed_harness.py \
   --uri ws://127.0.0.1:10012/ws/stream \
   --input sample/sample_2.m4a \
   --reference sample/sample_2.txt \
@@ -268,9 +331,11 @@ ASR 启动后：19350 MiB used
 
 ```text
 Qwen3-ASR-Toolkit/
-├── deploy/                 # Native server 和验证脚本
+├── client/                 # CLI 和 Gradio 客户端
+├── deploy/                 # Native server、ForcedAligner server 和 systemd
 ├── docs/                   # 中文文档
-├── qwen3_asr_toolkit/       # CLI、音频、离线分段、ForcedAligner 客户端
+├── examples/               # Python 调用示例和验证脚本
+├── qwen3_asr_toolkit/       # 音频、离线分段、ForcedAligner 客户端
 ├── qwen_asr/                # 内嵌 Qwen3-ASR 模型实现和 vLLM 插件
 ├── sample/                  # 样例音频和参考文本
 ├── scripts/                 # 部署、停止、测试脚本

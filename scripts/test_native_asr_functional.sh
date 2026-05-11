@@ -56,7 +56,7 @@ qwen3-asr-offline-cli \
   --output-json "$OUT_DIR/offline_cli_sample_2.json" \
   --quiet
 
-python deploy/test_native_streaming_ws_harness.py \
+python examples/validation/test_native_streaming_ws_harness.py \
   --uri "${ASR_BASE_URL/http:/ws:}/ws/stream" \
   --input sample/sample_2.m4a \
   --reference sample/sample_2.txt \

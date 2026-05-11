@@ -5,8 +5,8 @@ from typing import Sequence
 
 import requests
 
-from qwen3_asr_toolkit import offline_cli, realtime_cli
-from qwen3_asr_toolkit.cli_utils import DEFAULT_SERVER_URL, normalize_server_url
+from client.cli import offline, stream
+from client.cli.url_utils import DEFAULT_SERVER_URL, normalize_server_url
 
 DEFAULT_BASE_URL = DEFAULT_SERVER_URL
 
@@ -25,9 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _print_nested_help(command: str) -> None:
     if command == "offline":
-        offline_cli.build_parser().print_help()
+        offline.build_parser().print_help()
     elif command == "stream":
-        realtime_cli.build_parser().print_help()
+        stream.build_parser().print_help()
 
 
 def run_health(argv: Sequence[str] | argparse.Namespace) -> None:
@@ -64,13 +64,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         if rest and rest[0] in {"-h", "--help"}:
             _print_nested_help("offline")
             return
-        offline_cli.main(rest)
+        offline.main(rest)
         return
     if command == "stream":
         if rest and rest[0] in {"-h", "--help"}:
             _print_nested_help("stream")
             return
-        realtime_cli.main(rest)
+        stream.main(rest)
         return
     if command == "health":
         try:

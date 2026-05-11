@@ -164,3 +164,25 @@ qwen3-asr-stream-cli --server http://服务器IP:10012 --input-file sample/sampl
 - 远程访问至少需要开放 ASR 端口 `10012`。
 - 如果需要直接访问 ForcedAligner，再开放 `10013`。
 - ASR 内部调用 ForcedAligner 默认仍可使用 `127.0.0.1:10013`。
+
+
+## Gradio 客户端部署
+
+Gradio 只作为客户端访问 Native ASR Server，不加载模型。
+
+```bash
+pip install -r requirements-client.txt
+
+qwen3-asr-gradio \
+  --server http://服务器IP:10012 \
+  --host 0.0.0.0 \
+  --port 7860
+```
+
+浏览器打开：
+
+```text
+http://服务器IP:7860
+```
+
+远程访问时至少需要开放 ASR 服务端口 `10012` 和 Gradio 端口 `7860`。

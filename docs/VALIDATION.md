@@ -13,8 +13,8 @@ conda activate qwen-asr
 python -m py_compile \
   deploy/vllm_streaming_server_native.py \
   deploy/streaming_utils.py \
-  deploy/test_native_streaming_ws_harness.py \
-  deploy/test_native_streaming_windowed_harness.py \
+  examples/validation/test_native_streaming_ws_harness.py \
+  examples/validation/test_native_streaming_windowed_harness.py \
   qwen3_asr_toolkit/audio_tools.py \
   qwen3_asr_toolkit/offline_transcriber.py \
   qwen3_asr_toolkit/forced_aligner_client.py
@@ -93,7 +93,7 @@ segment_count > 1
 ## 7. WebSocket 120s 验证
 
 ```bash
-python deploy/test_native_streaming_ws_harness.py \
+python examples/validation/test_native_streaming_ws_harness.py \
   --uri ws://127.0.0.1:10012/ws/stream \
   --input sample/sample_2.m4a \
   --reference sample/sample_2.txt \
@@ -124,7 +124,7 @@ final.text 非空
 ## 8. WebSocket windowed 全量验证
 
 ```bash
-python deploy/test_native_streaming_windowed_harness.py \
+python examples/validation/test_native_streaming_windowed_harness.py \
   --uri ws://127.0.0.1:10012/ws/stream \
   --input sample/sample_2.m4a \
   --reference sample/sample_2.txt \
@@ -182,3 +182,17 @@ qwen3-asr-stream-cli \
 ```bash
 bash scripts/test_native_asr_functional.sh
 ```
+
+
+## Gradio 验证
+
+```bash
+qwen3-asr-gradio --server http://127.0.0.1:10012 --host 0.0.0.0 --port 7860
+```
+
+验收步骤：
+
+1. 打开 `http://服务器IP:7860`。
+2. 离线 Tab 上传 `sample/sample_0.mp3`，确认文本非空。
+3. 实时 Tab 授权浏览器麦克风，开始讲话，确认 partial 持续刷新。
+4. 点击停止实时转写，确认 final 文本非空。

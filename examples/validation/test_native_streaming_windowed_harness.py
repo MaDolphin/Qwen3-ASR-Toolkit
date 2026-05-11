@@ -30,7 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from deploy.test_native_streaming_ws_harness import run_case
+from examples.validation.test_native_streaming_ws_harness import run_case
 from qwen3_asr_toolkit.audio_tools import WAV_SAMPLE_RATE, load_audio
 
 
